@@ -1,6 +1,7 @@
 import pytest
-from csfd.models.fake import FakeChatModel
 from pydantic import BaseModel
+
+from csfd.models.fake import FakeChatModel
 
 
 class _Out(BaseModel):

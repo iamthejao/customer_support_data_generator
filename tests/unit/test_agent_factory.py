@@ -1,11 +1,12 @@
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from csfd.agents.factory import AgentFactory
 from csfd.agents.generator import Generator
 from csfd.models.fake import FakeChatModel
 from csfd.prompts.registry import PromptHandle, PromptRegistry
 from csfd.settings import AgentLLMConfig
-from pydantic import BaseModel
 
 
 class _StubArtifact(BaseModel):

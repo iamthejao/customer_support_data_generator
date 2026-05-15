@@ -1,5 +1,6 @@
 import jinja2
 import pytest
+
 from csfd.agents.base import AgentContext, Verdict
 from csfd.agents.checker import Checker
 from csfd.models.fake import FakeChatModel

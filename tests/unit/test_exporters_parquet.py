@@ -3,6 +3,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
+
 from csfd.storage.db import Database
 from csfd.storage.exporters import export_run_to_parquet
 from csfd.storage.migrations.runner import apply_migrations

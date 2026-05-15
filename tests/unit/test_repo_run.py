@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+
 from csfd.storage.db import Database
 from csfd.storage.migrations.runner import apply_migrations
 from csfd.storage.repository import RunRecord, RunRepo

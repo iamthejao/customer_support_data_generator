@@ -1,11 +1,12 @@
 import jinja2
 import pytest
+from pydantic import BaseModel
+
 from csfd.agents.base import AgentContext, Issue, Verdict
 from csfd.agents.checker import Checker
 from csfd.agents.generator import Generator
 from csfd.models.fake import FakeChatModel
 from csfd.prompts.registry import PromptHandle
-from pydantic import BaseModel
 
 
 class _Problem(BaseModel):

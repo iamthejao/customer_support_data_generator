@@ -2,6 +2,7 @@
 
 import jinja2
 import pytest
+
 from csfd.agents.base import AgentContext
 from csfd.agents.creative_noise import CreativeNoise, TurnModification
 from csfd.models.fake import FakeChatModel

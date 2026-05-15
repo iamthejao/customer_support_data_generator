@@ -57,6 +57,9 @@ ignore = ["E501"]   # line length handled by formatter
 [tool.ruff.format]
 quote-style = "double"
 
+[tool.ruff.lint.isort]
+known-first-party = ["csfd"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

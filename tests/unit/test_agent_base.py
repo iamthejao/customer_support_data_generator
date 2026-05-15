@@ -1,6 +1,7 @@
 import pytest
-from csfd.agents.base import AgentContext, Issue, Verdict
 from pydantic import ValidationError
+
+from csfd.agents.base import AgentContext, Issue, Verdict
 
 
 def test_issue_requires_severity_and_location() -> None:

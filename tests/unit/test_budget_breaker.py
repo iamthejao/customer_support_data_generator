@@ -1,7 +1,8 @@
 import pytest
+from pybreaker import CircuitBreakerError
+
 from csfd.budget.breaker import build_breaker
 from csfd.errors import TransportError
-from pybreaker import CircuitBreakerError
 
 
 def test_breaker_trips_after_threshold() -> None:
