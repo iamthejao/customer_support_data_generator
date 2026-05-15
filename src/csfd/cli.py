@@ -291,3 +291,15 @@ def inspect(
     typer.echo(f"  kb_articles: {kb_count}")
     typer.echo(f"  tickets:     {ticket_count}")
     typer.echo(f"  turns:       {turn_count}")
+
+
+@app.command("render-graphs")
+def render_graphs(
+    out: str = typer.Option("docs/diagrams", "--out"),
+) -> None:
+    """Regenerate docs/diagrams/*.mmd from the structural subgraphs."""
+    from scripts.render_graphs import render_all
+
+    written = render_all(Path(out))
+    for name, path in written.items():
+        typer.echo(f"  {name} → {path}")
