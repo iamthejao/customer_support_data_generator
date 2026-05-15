@@ -64,10 +64,11 @@ disallow_untyped_decorators = true
 plugins = ["pydantic.mypy"]
 
 [tool.pyright]
-venvPath = "."
-venv = ".venv"
+pythonVersion = "3.12"
+pythonPath = ".venv/bin/python"
 extraPaths = ["src"]
 include = ["src", "tests"]
+reportMissingImports = "warning"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
