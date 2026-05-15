@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 from csfd.agents.base import AgentContext
@@ -19,6 +20,7 @@ from csfd.phases.phase2_cases.sampler import sample_ticket_count, sample_ticket_
 from csfd.phases.phase2_cases.state import (
     AgentPersona,
     CommittedTicket,
+    CommittedTurn,
     CustomerPersona,
     TicketDraft,
     TicketState,
@@ -26,7 +28,14 @@ from csfd.phases.phase2_cases.state import (
 )
 from csfd.settings import Phase2Config
 from csfd.storage.db import Database
-from csfd.storage.repository import KBArticleRepo, ProblemRepo
+from csfd.storage.repository import (
+    KBArticleRepo,
+    ProblemRepo,
+    TicketRecord,
+    TicketRepo,
+    TurnRecord,
+    TurnRepo,
+)
 from csfd.ticket_types.definitions import TICKET_TYPE_METADATA, TicketType
 from csfd.utils.rng import derive_rng, weighted_choice
 
@@ -318,3 +327,81 @@ async def turn_scenario_check_node(
         prompt_name="phase2.turn_consistency",  # placeholder; real prompt in Plan 5
         payload=payload,
     )
+
+
+def persist_ticket_node(
+    state: TicketState,
+    *,
+    db: Database,
+    ticket: CommittedTicket,
+) -> dict[str, Any]:
+    """Idempotently persist a committed ticket row."""
+    repo = TicketRepo(db)
+    repo.create(
+        TicketRecord(
+            id=ticket.id,
+            run_id=state.run_id,
+            problem_id=ticket.draft.problem_id,
+            kb_article_id=ticket.draft.kb_article_id,
+            ticket_type=ticket.draft.ticket_type,
+            priority=ticket.draft.priority,
+            status=ticket.status,
+            subject=ticket.draft.subject,
+            customer_persona_json=ticket.draft.customer_persona.model_dump_json(),
+            agent_persona_json=ticket.draft.agent_persona.model_dump_json(),
+            ground_truth_json=(json.dumps(ticket.ground_truth) if ticket.ground_truth else None),
+            metadata_json=(json.dumps(ticket.draft.metadata) if ticket.draft.metadata else None),
+            quality_flag=ticket.quality_flag,
+            unresolved_issues_json=(
+                json.dumps([v.model_dump() for v in ticket.unresolved_issues])
+                if ticket.unresolved_issues
+                else None
+            ),
+            created_at=datetime.now(UTC),
+            resolved_at=None,
+        )
+    )
+    return {
+        "stats": state.stats.model_copy(
+            update={
+                "tickets_committed": state.stats.tickets_committed + 1,
+            }
+        )
+    }
+
+
+def persist_turn_node(
+    state: TicketState,
+    *,
+    db: Database,
+    turn: CommittedTurn,
+) -> dict[str, Any]:
+    """Idempotently persist a committed turn row."""
+    repo = TurnRepo(db)
+    repo.create(
+        TurnRecord(
+            id=turn.id,
+            ticket_id=turn.ticket_id,
+            turn_index=turn.turn_index,
+            speaker=turn.draft.speaker,
+            speaker_persona=turn.draft.speaker_persona,
+            content=turn.draft.content,
+            intent=turn.draft.intent,
+            kb_references_json=(
+                json.dumps(turn.draft.kb_references) if turn.draft.kb_references else None
+            ),
+            noise_applied=turn.draft.noise_applied,
+            noise_type=turn.draft.noise_type,
+            quality_flag=turn.quality_flag,
+            created_at=datetime.now(UTC),
+        )
+    )
+    return {
+        "stats": state.stats.model_copy(
+            update={
+                "turns_committed": state.stats.turns_committed + 1,
+                "turns_with_noise": state.stats.turns_with_noise
+                + (1 if turn.draft.noise_applied else 0),
+            }
+        ),
+    }
