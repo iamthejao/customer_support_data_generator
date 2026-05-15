@@ -9,7 +9,7 @@ pipeline:
 agents:
   generator:
     provider: anthropic
-    model: claude-sonnet-4-7
+    model: claude-sonnet-4-6
     temperature: 0.85
     max_tokens: 4096
     timeout_s: 60
@@ -30,7 +30,7 @@ agents:
     timeout_s: 30
   creative_noise:
     provider: anthropic
-    model: claude-sonnet-4-7
+    model: claude-sonnet-4-6
     temperature: 0.95
     timeout_s: 45
   coverage_judge:
