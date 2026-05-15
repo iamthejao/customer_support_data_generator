@@ -18,5 +18,5 @@ repos:
     rev: v1.10.0
     hooks:
       - id: mypy
-        additional_dependencies: [pydantic~=2.7, types-pyyaml]
+        additional_dependencies: [pydantic~=2.7, pydantic-settings~=2.3, types-pyyaml]
         args: [--strict, --no-warn-unused-ignores]
