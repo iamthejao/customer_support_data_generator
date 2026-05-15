@@ -98,3 +98,68 @@ def _row_to_run(row: sqlite3.Row) -> RunRecord:
         stats_json=row["stats_json"],
         error_summary=row["error_summary"],
     )
+
+
+@dataclass(slots=True)
+class ProblemRecord:
+    id: str
+    run_id: str
+    title: str
+    description: str
+    category: str
+    severity: str
+    has_kb: bool
+    coverage_reasoning: str | None
+    coverage_confidence: str | None
+    metadata_json: str | None
+    quality_flag: str | None
+    unresolved_issues_json: str | None
+    created_at: datetime
+
+
+class ProblemRepo:
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    def create(self, p: ProblemRecord) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO problems
+                  (id, run_id, title, description, category, severity, has_kb,
+                   coverage_reasoning, coverage_confidence, metadata_json,
+                   quality_flag, unresolved_issues_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    p.id, p.run_id, p.title, p.description, p.category, p.severity,
+                    1 if p.has_kb else 0,
+                    p.coverage_reasoning, p.coverage_confidence, p.metadata_json,
+                    p.quality_flag, p.unresolved_issues_json,
+                    p.created_at.isoformat(),
+                ),
+            )
+
+    def list_for_run(self, run_id: str, *, has_kb: bool | None = None) -> list[ProblemRecord]:
+        sql = "SELECT * FROM problems WHERE run_id = ?"
+        params: list[Any] = [run_id]
+        if has_kb is not None:
+            sql += " AND has_kb = ?"
+            params.append(1 if has_kb else 0)
+        sql += " ORDER BY created_at"
+        with self.db.connect() as conn:
+            rows = conn.execute(sql, tuple(params)).fetchall()
+        return [
+            ProblemRecord(
+                id=r["id"], run_id=r["run_id"], title=r["title"],
+                description=r["description"], category=r["category"],
+                severity=r["severity"], has_kb=bool(r["has_kb"]),
+                coverage_reasoning=r["coverage_reasoning"],
+                coverage_confidence=r["coverage_confidence"],
+                metadata_json=r["metadata_json"],
+                quality_flag=r["quality_flag"],
+                unresolved_issues_json=r["unresolved_issues_json"],
+                created_at=datetime.fromisoformat(r["created_at"]),
+            )
+            for r in rows
+        ]
