@@ -7,6 +7,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa  # type: ignore[import-untyped]
+import pyarrow.parquet as pq  # type: ignore[import-untyped]
+
 from csfd.storage.db import Database
 
 _TABLES: dict[str, str] = {
@@ -53,4 +56,25 @@ def export_run_to_jsonl(db: Database, run_id: str, *, out_dir: Path) -> list[Pat
         "files": file_checksums,
     }
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    return written
+
+
+def export_run_to_parquet(db: Database, run_id: str, *, out_dir: Path) -> list[Path]:
+    """Write one .parquet per artifact table. Returns the list of files."""
+    run_dir = out_dir / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    with db.connect() as conn:
+        for table, sql in _TABLES.items():
+            rows = conn.execute(sql, (run_id,)).fetchall()
+            if not rows:
+                continue
+            cols = list(rows[0].keys())
+            data: dict[str, list[Any]] = {c: [] for c in cols}
+            for r in rows:
+                for c in cols:
+                    data[c].append(_serialise(r[c]))
+            path = run_dir / f"{table}.parquet"
+            pq.write_table(pa.Table.from_pydict(data), path)
+            written.append(path)
     return written
