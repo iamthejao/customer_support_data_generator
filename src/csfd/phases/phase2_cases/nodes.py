@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from csfd.agents.base import AgentContext
+from csfd.agents.creative_noise import TurnModification
 from csfd.agents.factory import AgentFactory
 from csfd.phases.phase1_kb.state import (
     CommittedArticle,
@@ -26,7 +28,7 @@ from csfd.settings import Phase2Config
 from csfd.storage.db import Database
 from csfd.storage.repository import KBArticleRepo, ProblemRepo
 from csfd.ticket_types.definitions import TICKET_TYPE_METADATA, TicketType
-from csfd.utils.rng import derive_rng
+from csfd.utils.rng import derive_rng, weighted_choice
 
 
 async def load_kb_node(state: TicketState, *, db: Database) -> dict[str, Any]:
@@ -196,3 +198,67 @@ async def turn_writer_node(
     if not isinstance(draft, TurnDraft):
         raise TypeError(f"Expected TurnDraft, got {type(draft).__name__}")
     return {"current_turn_draft": draft}
+
+
+def creative_noise_gate(state: TicketState, *, probability: float) -> str:
+    """Deterministic per-turn coin flip against `probability`.
+
+    Returns `"apply_noise"` if the seeded RNG draw is below `probability`,
+    otherwise `"skip_noise"`. The label is derived from `(run_seed, turn_index,
+    current_ticket.id)` so each gate decision is uniquely seeded but
+    reproducible.
+    """
+    if state.current_ticket is None:
+        return "skip_noise"
+    label = f"noise_gate:{state.current_ticket.id}:{state.turn_index}"
+    rng = derive_rng(state.run_seed, label)
+    draw = rng.random()
+    return "apply_noise" if draw < probability else "skip_noise"
+
+
+async def creative_noise_node(
+    state: TicketState,
+    *,
+    factory: AgentFactory,
+    noise_type_weights: Mapping[str, float],
+) -> dict[str, Any]:
+    """Apply CreativeNoise to the current turn draft.
+
+    Samples a noise type from `noise_type_weights`, invokes the `creative_noise`
+    agent for the modified content, and returns a state update that overwrites
+    `current_turn_draft` with the modified version and flips `noise_applied` /
+    `noise_type` so persistence records the noise category.
+    """
+    if state.current_turn_draft is None:
+        raise ValueError("creative_noise_node called without current_turn_draft")
+    label = (
+        f"noise_type:{state.current_ticket.id if state.current_ticket else 'x'}:{state.turn_index}"
+    )
+    rng = derive_rng(state.run_seed, label)
+    noise_type = weighted_choice(noise_type_weights, rng)
+
+    noise_agent = factory.build_creative_noise(
+        name="creative_noise",
+        prompt_name="phase2.creative_noise",
+    )
+    ctx = AgentContext(
+        inputs={
+            "turn_draft": state.current_turn_draft.model_dump(),
+            "noise_type": noise_type,
+        }
+    )
+    mod = await noise_agent.invoke(ctx)
+    if not isinstance(mod, TurnModification):
+        raise TypeError(f"Expected TurnModification, got {type(mod).__name__}")
+    modified = state.current_turn_draft.model_copy(
+        update={
+            "content": mod.modified_content,
+            "noise_applied": True,
+            "noise_type": mod.noise_type or noise_type,
+        }
+    )
+    return {
+        "current_turn_draft": modified,
+        "noise_applied": True,
+        "noise_type": mod.noise_type or noise_type,
+    }
