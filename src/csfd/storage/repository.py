@@ -330,3 +330,90 @@ class TurnRepo:
             )
             for r in rows
         ]
+
+
+@dataclass(slots=True)
+class AgentTraceRecord:
+    id: str
+    run_id: str
+    thread_id: str
+    node_name: str
+    agent_role: str
+    artifact_type: str
+    artifact_id: str | None
+    attempt: int
+    prompt_id: str
+    input_json: str
+    output_json: str | None
+    verdict: str | None
+    verdict_issues_json: str | None
+    model_provider: str
+    model_id: str
+    tokens_in: int | None
+    tokens_out: int | None
+    cost_usd_estimated: float | None
+    latency_ms: int | None
+    parent_trace_id: str | None
+    status: str
+    error_class: str | None
+    error_message: str | None
+    created_at: datetime
+
+
+class AgentTraceRepo:
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    def create(self, t: AgentTraceRecord) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO agent_traces
+                  (id, run_id, thread_id, node_name, agent_role,
+                   artifact_type, artifact_id, attempt, prompt_id,
+                   input_json, output_json, verdict, verdict_issues_json,
+                   model_provider, model_id, tokens_in, tokens_out,
+                   cost_usd_estimated, latency_ms, parent_trace_id,
+                   status, error_class, error_message, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    t.id, t.run_id, t.thread_id, t.node_name, t.agent_role,
+                    t.artifact_type, t.artifact_id, t.attempt, t.prompt_id,
+                    t.input_json, t.output_json, t.verdict, t.verdict_issues_json,
+                    t.model_provider, t.model_id, t.tokens_in, t.tokens_out,
+                    t.cost_usd_estimated, t.latency_ms, t.parent_trace_id,
+                    t.status, t.error_class, t.error_message,
+                    t.created_at.isoformat(),
+                ),
+            )
+
+    def list_for_run(
+        self, run_id: str, *, agent_role: str | None = None
+    ) -> list[AgentTraceRecord]:
+        sql = "SELECT * FROM agent_traces WHERE run_id = ?"
+        params: list[Any] = [run_id]
+        if agent_role:
+            sql += " AND agent_role = ?"
+            params.append(agent_role)
+        sql += " ORDER BY created_at"
+        with self.db.connect() as conn:
+            rows = conn.execute(sql, tuple(params)).fetchall()
+        return [
+            AgentTraceRecord(
+                id=r["id"], run_id=r["run_id"], thread_id=r["thread_id"],
+                node_name=r["node_name"], agent_role=r["agent_role"],
+                artifact_type=r["artifact_type"], artifact_id=r["artifact_id"],
+                attempt=r["attempt"], prompt_id=r["prompt_id"],
+                input_json=r["input_json"], output_json=r["output_json"],
+                verdict=r["verdict"], verdict_issues_json=r["verdict_issues_json"],
+                model_provider=r["model_provider"], model_id=r["model_id"],
+                tokens_in=r["tokens_in"], tokens_out=r["tokens_out"],
+                cost_usd_estimated=r["cost_usd_estimated"],
+                latency_ms=r["latency_ms"], parent_trace_id=r["parent_trace_id"],
+                status=r["status"], error_class=r["error_class"],
+                error_message=r["error_message"],
+                created_at=datetime.fromisoformat(r["created_at"]),
+            )
+            for r in rows
+        ]
