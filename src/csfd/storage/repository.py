@@ -163,3 +163,64 @@ class ProblemRepo:
             )
             for r in rows
         ]
+
+
+@dataclass(slots=True)
+class KBArticleRecord:
+    id: str
+    run_id: str
+    problem_id: str
+    title: str
+    content_markdown: str
+    content_hash: str
+    troubleshooting_steps_json: str
+    prerequisites_json: str | None
+    metadata_json: str | None
+    version: int
+    quality_flag: str | None
+    unresolved_issues_json: str | None
+    created_at: datetime
+
+
+class KBArticleRepo:
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    def create(self, a: KBArticleRecord) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO kb_articles
+                  (id, run_id, problem_id, title, content_markdown, content_hash,
+                   troubleshooting_steps_json, prerequisites_json, metadata_json,
+                   version, quality_flag, unresolved_issues_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    a.id, a.run_id, a.problem_id, a.title, a.content_markdown,
+                    a.content_hash, a.troubleshooting_steps_json,
+                    a.prerequisites_json, a.metadata_json, a.version,
+                    a.quality_flag, a.unresolved_issues_json,
+                    a.created_at.isoformat(),
+                ),
+            )
+
+    def get_by_problem(self, problem_id: str) -> KBArticleRecord | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM kb_articles WHERE problem_id = ?", (problem_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return KBArticleRecord(
+            id=row["id"], run_id=row["run_id"], problem_id=row["problem_id"],
+            title=row["title"], content_markdown=row["content_markdown"],
+            content_hash=row["content_hash"],
+            troubleshooting_steps_json=row["troubleshooting_steps_json"],
+            prerequisites_json=row["prerequisites_json"],
+            metadata_json=row["metadata_json"],
+            version=row["version"],
+            quality_flag=row["quality_flag"],
+            unresolved_issues_json=row["unresolved_issues_json"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
