@@ -1,3 +1,4 @@
+import pytest
 from pydantic import BaseModel
 from pydantic import ValidationError as PydValidationError
 
@@ -20,14 +21,12 @@ def test_hierarchy_roots_at_pipeline_error() -> None:
 
 
 def test_schema_validation_error_carries_pydantic_errors_and_raw() -> None:
-    try:
+    with pytest.raises(PydValidationError) as exc_info:
         _DummyModel.model_validate({"n": "not-an-int"})
-    except PydValidationError as e:
-        # Cast to list[dict[str, Any]]; e.errors() returns list[ErrorDetails] which is compatible
-        err = SchemaValidationError(
-            errors=[dict(error_dict) for error_dict in e.errors()],
-            raw_output='{"n":"not-an-int"}'
-        )
+    err = SchemaValidationError(
+        errors=[dict(error_dict) for error_dict in exc_info.value.errors()],
+        raw_output='{"n":"not-an-int"}',
+    )
     assert err.raw_output == '{"n":"not-an-int"}'
     assert len(err.errors) == 1
     assert "n" in err.errors[0]["loc"]
