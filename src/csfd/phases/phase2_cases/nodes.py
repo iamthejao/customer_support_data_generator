@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from csfd.agents.base import AgentContext
+from csfd.agents.factory import AgentFactory
 from csfd.phases.phase1_kb.state import (
     CommittedArticle,
     CommittedProblem,
@@ -18,6 +20,7 @@ from csfd.phases.phase2_cases.state import (
     CustomerPersona,
     TicketDraft,
     TicketState,
+    TurnDraft,
 )
 from csfd.settings import Phase2Config
 from csfd.storage.db import Database
@@ -152,3 +155,44 @@ def pick_ticket_count(
         cfg.tickets_per_problem.has_kb if problem.has_kb else cfg.tickets_per_problem.no_kb
     )
     return sample_ticket_count(rng, range_inclusive=range_inclusive)
+
+
+async def turn_writer_node(
+    state: TicketState,
+    *,
+    factory: AgentFactory,
+) -> dict[str, Any]:
+    """Generate the next turn for `state.current_ticket`.
+
+    Reads the ticket's persona + prior turns + KB article (if any) so the
+    Generator can produce a context-aware next turn.
+    """
+    if state.current_ticket is None:
+        raise ValueError("turn_writer_node called without current_ticket")
+    ticket = state.current_ticket
+    pid = ticket.draft.problem_id
+    article = state.kb_by_problem.get(pid)
+
+    writer = factory.build_generator(
+        name="turn_writer",
+        prompt_name="phase2.turn_generator",
+        output_schema_factory=lambda: TurnDraft,
+    )
+    ctx = AgentContext(
+        inputs={
+            "company_name": state.company.name,
+            "ticket": ticket.draft.model_dump(),
+            "kb_article": article.draft.model_dump() if article else None,
+            "prior_turns": [
+                {"speaker": t.draft.speaker, "content": t.draft.content, "intent": t.draft.intent}
+                for t in state.turns_committed
+            ],
+            "turn_index": state.turn_index,
+        },
+        prior_verdicts=state.verdicts,
+        retry_attempt=state.retry_attempt,
+    )
+    draft = await writer.invoke(ctx)
+    if not isinstance(draft, TurnDraft):
+        raise TypeError(f"Expected TurnDraft, got {type(draft).__name__}")
+    return {"current_turn_draft": draft}
