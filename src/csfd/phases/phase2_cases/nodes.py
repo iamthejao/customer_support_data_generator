@@ -11,9 +11,19 @@ from csfd.phases.phase1_kb.state import (
     KBArticleDraft,
     ProblemDraft,
 )
-from csfd.phases.phase2_cases.state import TicketState
+from csfd.phases.phase2_cases.sampler import sample_ticket_count, sample_ticket_type
+from csfd.phases.phase2_cases.state import (
+    AgentPersona,
+    CommittedTicket,
+    CustomerPersona,
+    TicketDraft,
+    TicketState,
+)
+from csfd.settings import Phase2Config
 from csfd.storage.db import Database
 from csfd.storage.repository import KBArticleRepo, ProblemRepo
+from csfd.ticket_types.definitions import TICKET_TYPE_METADATA, TicketType
+from csfd.utils.rng import derive_rng
 
 
 async def load_kb_node(state: TicketState, *, db: Database) -> dict[str, Any]:
@@ -66,3 +76,79 @@ async def load_kb_node(state: TicketState, *, db: Database) -> dict[str, Any]:
         )
 
     return {"problem_pool": pool, "kb_by_problem": kb_by_problem}
+
+
+async def ticket_sampler_node(
+    state: TicketState,
+    *,
+    cfg: Phase2Config,
+) -> dict[str, Any]:
+    """Sample the next (problem, ticket_type) pair for this run.
+
+    Honours the hard `has_kb=False ⇒ L3` rule via `sample_ticket_type`.
+    For Plan 4 the sampler picks the *first* problem in the pool that still has
+    capacity (Plan 5 will wire the outer loop via a counter on state).
+    """
+    if not state.problem_pool:
+        raise ValueError("ticket_sampler_node called with empty problem_pool")
+    rng = derive_rng(state.run_seed, f"ticket_sampler:{len(state.turns_committed)}")
+    problem = state.problem_pool[0]
+    tt = sample_ticket_type(
+        problem,
+        rng,
+        weights_has_kb=cfg.ticket_type_weights.has_kb,
+        weights_no_kb=cfg.ticket_type_weights.no_kb,
+    )
+    return {
+        "current_problem_id": problem.id,
+        "ticket_type": tt.value,
+    }
+
+
+async def ticket_init_node(
+    state: TicketState,
+    *,
+    problem: CommittedProblem,
+    ticket_type: str,
+    kb_article_id: str | None,
+) -> dict[str, Any]:
+    """Build a `CommittedTicket` (draft form) with synthesised personas."""
+    tt = TicketType(ticket_type)
+    md = TICKET_TYPE_METADATA[tt]
+    rng = derive_rng(state.run_seed, f"persona:{problem.id}:{ticket_type}")
+    customer_tier = rng.choice(["standard", "premium", "enterprise"])
+    customer_tone = rng.choice(["neutral", "frustrated", "polite", "urgent"])
+    ticket = CommittedTicket(
+        id=problem.id + ":" + ticket_type + ":" + str(rng.randint(0, 1_000_000)),
+        draft=TicketDraft(
+            problem_id=problem.id,
+            kb_article_id=kb_article_id,
+            ticket_type=tt.value,
+            priority=("high" if tt == TicketType.L3 else "medium"),
+            subject=problem.draft.title,
+            customer_persona=CustomerPersona(
+                name=f"Customer-{rng.randint(1000, 9999)}",
+                tier=customer_tier,
+                tone=customer_tone,
+            ),
+            agent_persona=AgentPersona(
+                name=f"Agent-{rng.randint(1000, 9999)}",
+                tier=tt.value,
+                expertise=md.persona_label,
+            ),
+        ),
+    )
+    return {"current_ticket": ticket, "turn_index": 0}
+
+
+def pick_ticket_count(
+    state: TicketState,
+    problem: CommittedProblem,
+    cfg: Phase2Config,
+) -> int:
+    """Sample a target ticket count for this problem (helper, not a graph node)."""
+    rng = derive_rng(state.run_seed, f"ticket_count:{problem.id}")
+    range_inclusive = (
+        cfg.tickets_per_problem.has_kb if problem.has_kb else cfg.tickets_per_problem.no_kb
+    )
+    return sample_ticket_count(rng, range_inclusive=range_inclusive)
