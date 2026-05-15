@@ -16,11 +16,15 @@ Both functions update the run status to ``completed`` on a normal exit.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
+
+from langgraph.graph.state import CompiledStateGraph
 
 from csfd.agents.factory import AgentFactory
 from csfd.graph.runtime_phase1 import build_runtime_phase1_graph
 from csfd.graph.runtime_phase2 import build_runtime_phase2_graph
+from csfd.models.registry import build_llm
 from csfd.phases.phase1_kb.state import KBState
 from csfd.phases.phase2_cases.nodes import (
     load_kb_node,
@@ -29,9 +33,10 @@ from csfd.phases.phase2_cases.nodes import (
 )
 from csfd.phases.phase2_cases.sampler import sample_ticket_count
 from csfd.phases.phase2_cases.state import TicketState
+from csfd.prompts.registry import PromptRegistry
 from csfd.seeds.company import CompanyProfile
 from csfd.seeds.scenarios import ScenarioCatalogue
-from csfd.settings import Phase1Config, Phase2Config
+from csfd.settings import Phase1Config, Phase2Config, load_settings
 from csfd.storage.db import Database
 from csfd.storage.repository import RunRecord, RunRepo
 from csfd.utils.rng import derive_rng
@@ -85,6 +90,49 @@ async def run_phase1(
         await graph.ainvoke(state)
     RunRepo(db).update_status(run_id, status="completed", completed=True)
     return run_id
+
+
+def _factory_from_settings() -> AgentFactory:
+    """Build an ``AgentFactory`` from the on-disk default settings + prompts.
+
+    Used exclusively by the LangGraph Studio entrypoints below — production
+    callers wire the factory + db themselves.
+    """
+    settings = load_settings()
+    reg = PromptRegistry(root=Path("prompts"))
+    reg.load()
+    return AgentFactory(
+        prompts=reg,
+        llm_builder=build_llm,
+        agent_configs=settings.agents,
+    )
+
+
+def make_phase1_studio_graph() -> CompiledStateGraph:
+    """LangGraph Studio entrypoint — exposes the runtime Phase 1 graph."""
+    settings = load_settings()
+    factory = _factory_from_settings()
+    db = Database(path=Path(settings.storage.sqlite_path))
+    return build_runtime_phase1_graph(
+        factory=factory,
+        db=db,
+        max_retries=settings.pipeline.budget.max_retries_per_artifact,
+        kb_target_rate=settings.phase1.kb_coverage_target_rate,
+    )
+
+
+def make_phase2_studio_graph() -> CompiledStateGraph:
+    """LangGraph Studio entrypoint — exposes the runtime Phase 2 graph."""
+    settings = load_settings()
+    factory = _factory_from_settings()
+    db = Database(path=Path(settings.storage.sqlite_path))
+    return build_runtime_phase2_graph(
+        factory=factory,
+        db=db,
+        max_retries=settings.pipeline.budget.max_retries_per_artifact,
+        noise_probability=settings.phase2.creative_noise_probability,
+        noise_type_weights=settings.phase2.noise_type_weights,
+    )
 
 
 async def run_phase2(
