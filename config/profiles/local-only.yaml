@@ -1,0 +1,25 @@
+agents:
+  generator:
+    provider: openai_compat
+    model: llama3.3:70b
+    base_url: http://localhost:11434/v1
+  consistency:
+    provider: openai_compat
+    model: llama3.3:70b
+    base_url: http://localhost:11434/v1
+  background:
+    provider: openai_compat
+    model: llama3.3:70b
+    base_url: http://localhost:11434/v1
+  scenario:
+    provider: openai_compat
+    model: llama3.3:70b
+    base_url: http://localhost:11434/v1
+  creative_noise:
+    provider: openai_compat
+    model: llama3.3:70b
+    base_url: http://localhost:11434/v1
+  coverage_judge:
+    provider: openai_compat
+    model: llama3.3:70b
+    base_url: http://localhost:11434/v1

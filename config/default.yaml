@@ -1,0 +1,78 @@
+pipeline:
+  version: "0.1.0"
+  run_seed: null
+  budget:
+    max_tokens_per_run: 5000000
+    max_usd_per_run: 10.0
+    max_retries_per_artifact: 3
+
+agents:
+  generator:
+    provider: anthropic
+    model: claude-sonnet-4-7
+    temperature: 0.85
+    max_tokens: 4096
+    timeout_s: 60
+  consistency:
+    provider: anthropic
+    model: claude-haiku-4-5
+    temperature: 0.1
+    timeout_s: 30
+  background:
+    provider: anthropic
+    model: claude-haiku-4-5
+    temperature: 0.1
+    timeout_s: 30
+  scenario:
+    provider: anthropic
+    model: claude-haiku-4-5
+    temperature: 0.1
+    timeout_s: 30
+  creative_noise:
+    provider: anthropic
+    model: claude-sonnet-4-7
+    temperature: 0.95
+    timeout_s: 45
+  coverage_judge:
+    provider: anthropic
+    model: claude-haiku-4-5
+    temperature: 0.2
+    timeout_s: 30
+
+phase1:
+  problem_count: 100
+  kb_coverage_target_rate: 0.7
+  dedup_similarity_threshold: 0.88
+  dedup_method: lexical
+
+phase2:
+  tickets_per_problem:
+    has_kb: [3, 5]
+    no_kb: [1, 2]
+  ticket_type_weights:
+    has_kb: { docs_request: 0.10, l1: 0.55, l2: 0.25, l3: 0.10 }
+    no_kb: { l3: 1.0 }
+  creative_noise_probability: 0.20
+  noise_type_weights:
+    typos_informal_phrasing: 0.25
+    tangential_complaint: 0.15
+    incomplete_info: 0.20
+    agent_self_correction: 0.10
+    sentiment_flip: 0.15
+    wrong_kb_citation: 0.10
+    code_switch_language: 0.05
+  voting_policy: strict_all_pass
+  retry_exhaustion_policy: commit_with_warning
+  min_turns_per_ticket: 2
+  max_turns_per_ticket: 12
+
+observability:
+  structlog_json: true
+  langsmith_enabled: false
+  langsmith_project: csfd
+  persist_stream_updates: true
+
+storage:
+  sqlite_path: "data/runs.sqlite"
+  exports_dir: "data/exports"
+  exports_format: ["jsonl", "parquet"]

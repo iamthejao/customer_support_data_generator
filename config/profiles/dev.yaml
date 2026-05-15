@@ -1,0 +1,10 @@
+phase1:
+  problem_count: 5
+phase2:
+  tickets_per_problem:
+    has_kb: [1, 2]
+    no_kb: [1, 1]
+pipeline:
+  budget:
+    max_tokens_per_run: 100000
+    max_usd_per_run: 1.0
