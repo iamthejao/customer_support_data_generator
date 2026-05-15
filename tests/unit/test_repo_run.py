@@ -4,7 +4,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-
 from csfd.storage.db import Database
 from csfd.storage.migrations.runner import apply_migrations
 from csfd.storage.repository import RunRecord, RunRepo
@@ -42,13 +41,22 @@ def test_create_and_get_run(tmp_db_path: Path) -> None:
 def test_update_status_and_stats(tmp_db_path: Path) -> None:
     repo = _setup(tmp_db_path)
     run_id = str(uuid4())
-    repo.create(RunRecord(
-        id=run_id, phase="phase2", parent_run_id=None, status="running",
-        started_at=datetime.now(timezone.utc),  # noqa: UP017
-        completed_at=None, run_seed=1,
-        pipeline_version="0.1.0", git_sha=None,
-        config_snapshot_json="{}", stats_json=None, error_summary=None,
-    ))
+    repo.create(
+        RunRecord(
+            id=run_id,
+            phase="phase2",
+            parent_run_id=None,
+            status="running",
+            started_at=datetime.now(timezone.utc),  # noqa: UP017
+            completed_at=None,
+            run_seed=1,
+            pipeline_version="0.1.0",
+            git_sha=None,
+            config_snapshot_json="{}",
+            stats_json=None,
+            error_summary=None,
+        )
+    )
     repo.update_status(run_id, status="completed", stats={"tokens": 123})
     got = repo.get(run_id)
     assert got.status == "completed"

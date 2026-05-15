@@ -19,22 +19,41 @@ def test_export_jsonl_writes_problems_file(tmp_path: Path) -> None:
     db = Database(path=db_path)
     apply_migrations(db)
     run_id = str(uuid4())
-    RunRepo(db).create(RunRecord(
-        id=run_id, phase="phase1", parent_run_id=None, status="completed",
-        started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
-        run_seed=1, pipeline_version="0.1.0", git_sha=None,
-        config_snapshot_json="{}", stats_json=None, error_summary=None,
-    ))
+    RunRepo(db).create(
+        RunRecord(
+            id=run_id,
+            phase="phase1",
+            parent_run_id=None,
+            status="completed",
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
+            run_seed=1,
+            pipeline_version="0.1.0",
+            git_sha=None,
+            config_snapshot_json="{}",
+            stats_json=None,
+            error_summary=None,
+        )
+    )
     repo = ProblemRepo(db)
     for i in range(2):
-        repo.create(ProblemRecord(
-            id=str(uuid4()), run_id=run_id, title=f"P{i}",
-            description="d", category="c", severity="low",
-            has_kb=False, coverage_reasoning=None, coverage_confidence=None,
-            metadata_json=None, quality_flag=None,
-            unresolved_issues_json=None,
-            created_at=datetime.now(UTC),
-        ))
+        repo.create(
+            ProblemRecord(
+                id=str(uuid4()),
+                run_id=run_id,
+                title=f"P{i}",
+                description="d",
+                category="c",
+                severity="low",
+                has_kb=False,
+                coverage_reasoning=None,
+                coverage_confidence=None,
+                metadata_json=None,
+                quality_flag=None,
+                unresolved_issues_json=None,
+                created_at=datetime.now(UTC),
+            )
+        )
     out = tmp_path / "exports"
     paths = export_run_to_jsonl(db, run_id, out_dir=out)
     problems_path = out / run_id / "problems.jsonl"

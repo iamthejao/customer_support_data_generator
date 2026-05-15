@@ -1,4 +1,5 @@
 """Prompt template registry with content-hash versioning."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -36,7 +37,9 @@ class PromptRegistry:
             source = path.read_text(encoding="utf-8")
             template = self._env.from_string(source)
             self._handles[name] = PromptHandle(
-                name=name, template=template, source=source,
+                name=name,
+                template=template,
+                source=source,
                 version=short_hash(source),
             )
 

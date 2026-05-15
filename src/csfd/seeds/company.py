@@ -1,4 +1,5 @@
 """Parse company_seed.md into a typed CompanyProfile."""
+
 from __future__ import annotations
 
 import re

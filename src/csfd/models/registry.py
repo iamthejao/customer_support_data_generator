@@ -1,4 +1,5 @@
 """Build LangChain chat models from AgentLLMConfig."""
+
 from __future__ import annotations
 
 from langchain_anthropic import ChatAnthropic

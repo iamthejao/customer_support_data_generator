@@ -1,4 +1,5 @@
 """Data-access layer. Each *Repo encapsulates idempotent CRUD for one table."""
+
 from __future__ import annotations
 
 import json
@@ -41,11 +42,18 @@ class RunRepo:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    run.id, run.phase, run.parent_run_id, run.status,
+                    run.id,
+                    run.phase,
+                    run.parent_run_id,
+                    run.status,
                     run.started_at.isoformat(),
                     run.completed_at.isoformat() if run.completed_at else None,
-                    run.run_seed, run.pipeline_version, run.git_sha,
-                    run.config_snapshot_json, run.stats_json, run.error_summary,
+                    run.run_seed,
+                    run.pipeline_version,
+                    run.git_sha,
+                    run.config_snapshot_json,
+                    run.stats_json,
+                    run.error_summary,
                 ),
             )
 
@@ -132,10 +140,18 @@ class ProblemRepo:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    p.id, p.run_id, p.title, p.description, p.category, p.severity,
+                    p.id,
+                    p.run_id,
+                    p.title,
+                    p.description,
+                    p.category,
+                    p.severity,
                     1 if p.has_kb else 0,
-                    p.coverage_reasoning, p.coverage_confidence, p.metadata_json,
-                    p.quality_flag, p.unresolved_issues_json,
+                    p.coverage_reasoning,
+                    p.coverage_confidence,
+                    p.metadata_json,
+                    p.quality_flag,
+                    p.unresolved_issues_json,
                     p.created_at.isoformat(),
                 ),
             )
@@ -151,9 +167,13 @@ class ProblemRepo:
             rows = conn.execute(sql, tuple(params)).fetchall()
         return [
             ProblemRecord(
-                id=r["id"], run_id=r["run_id"], title=r["title"],
-                description=r["description"], category=r["category"],
-                severity=r["severity"], has_kb=bool(r["has_kb"]),
+                id=r["id"],
+                run_id=r["run_id"],
+                title=r["title"],
+                description=r["description"],
+                category=r["category"],
+                severity=r["severity"],
+                has_kb=bool(r["has_kb"]),
                 coverage_reasoning=r["coverage_reasoning"],
                 coverage_confidence=r["coverage_confidence"],
                 metadata_json=r["metadata_json"],
@@ -197,10 +217,18 @@ class KBArticleRepo:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    a.id, a.run_id, a.problem_id, a.title, a.content_markdown,
-                    a.content_hash, a.troubleshooting_steps_json,
-                    a.prerequisites_json, a.metadata_json, a.version,
-                    a.quality_flag, a.unresolved_issues_json,
+                    a.id,
+                    a.run_id,
+                    a.problem_id,
+                    a.title,
+                    a.content_markdown,
+                    a.content_hash,
+                    a.troubleshooting_steps_json,
+                    a.prerequisites_json,
+                    a.metadata_json,
+                    a.version,
+                    a.quality_flag,
+                    a.unresolved_issues_json,
                     a.created_at.isoformat(),
                 ),
             )
@@ -213,8 +241,11 @@ class KBArticleRepo:
         if row is None:
             return None
         return KBArticleRecord(
-            id=row["id"], run_id=row["run_id"], problem_id=row["problem_id"],
-            title=row["title"], content_markdown=row["content_markdown"],
+            id=row["id"],
+            run_id=row["run_id"],
+            problem_id=row["problem_id"],
+            title=row["title"],
+            content_markdown=row["content_markdown"],
             content_hash=row["content_hash"],
             troubleshooting_steps_json=row["troubleshooting_steps_json"],
             prerequisites_json=row["prerequisites_json"],
@@ -262,11 +293,20 @@ class TicketRepo:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    t.id, t.run_id, t.problem_id, t.kb_article_id, t.ticket_type,
-                    t.priority, t.status, t.subject,
-                    t.customer_persona_json, t.agent_persona_json,
-                    t.ground_truth_json, t.metadata_json,
-                    t.quality_flag, t.unresolved_issues_json,
+                    t.id,
+                    t.run_id,
+                    t.problem_id,
+                    t.kb_article_id,
+                    t.ticket_type,
+                    t.priority,
+                    t.status,
+                    t.subject,
+                    t.customer_persona_json,
+                    t.agent_persona_json,
+                    t.ground_truth_json,
+                    t.metadata_json,
+                    t.quality_flag,
+                    t.unresolved_issues_json,
                     t.created_at.isoformat(),
                     t.resolved_at.isoformat() if t.resolved_at else None,
                 ),
@@ -304,10 +344,18 @@ class TurnRepo:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    t.id, t.ticket_id, t.turn_index, t.speaker, t.speaker_persona,
-                    t.content, t.intent, t.kb_references_json,
-                    1 if t.noise_applied else 0, t.noise_type,
-                    t.quality_flag, t.created_at.isoformat(),
+                    t.id,
+                    t.ticket_id,
+                    t.turn_index,
+                    t.speaker,
+                    t.speaker_persona,
+                    t.content,
+                    t.intent,
+                    t.kb_references_json,
+                    1 if t.noise_applied else 0,
+                    t.noise_type,
+                    t.quality_flag,
+                    t.created_at.isoformat(),
                 ),
             )
 
@@ -319,9 +367,13 @@ class TurnRepo:
             ).fetchall()
         return [
             TurnRecord(
-                id=r["id"], ticket_id=r["ticket_id"], turn_index=r["turn_index"],
-                speaker=r["speaker"], speaker_persona=r["speaker_persona"],
-                content=r["content"], intent=r["intent"],
+                id=r["id"],
+                ticket_id=r["ticket_id"],
+                turn_index=r["turn_index"],
+                speaker=r["speaker"],
+                speaker_persona=r["speaker_persona"],
+                content=r["content"],
+                intent=r["intent"],
                 kb_references_json=r["kb_references_json"],
                 noise_applied=bool(r["noise_applied"]),
                 noise_type=r["noise_type"],
@@ -378,19 +430,34 @@ class AgentTraceRepo:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    t.id, t.run_id, t.thread_id, t.node_name, t.agent_role,
-                    t.artifact_type, t.artifact_id, t.attempt, t.prompt_id,
-                    t.input_json, t.output_json, t.verdict, t.verdict_issues_json,
-                    t.model_provider, t.model_id, t.tokens_in, t.tokens_out,
-                    t.cost_usd_estimated, t.latency_ms, t.parent_trace_id,
-                    t.status, t.error_class, t.error_message,
+                    t.id,
+                    t.run_id,
+                    t.thread_id,
+                    t.node_name,
+                    t.agent_role,
+                    t.artifact_type,
+                    t.artifact_id,
+                    t.attempt,
+                    t.prompt_id,
+                    t.input_json,
+                    t.output_json,
+                    t.verdict,
+                    t.verdict_issues_json,
+                    t.model_provider,
+                    t.model_id,
+                    t.tokens_in,
+                    t.tokens_out,
+                    t.cost_usd_estimated,
+                    t.latency_ms,
+                    t.parent_trace_id,
+                    t.status,
+                    t.error_class,
+                    t.error_message,
                     t.created_at.isoformat(),
                 ),
             )
 
-    def list_for_run(
-        self, run_id: str, *, agent_role: str | None = None
-    ) -> list[AgentTraceRecord]:
+    def list_for_run(self, run_id: str, *, agent_role: str | None = None) -> list[AgentTraceRecord]:
         sql = "SELECT * FROM agent_traces WHERE run_id = ?"
         params: list[Any] = [run_id]
         if agent_role:
@@ -401,17 +468,28 @@ class AgentTraceRepo:
             rows = conn.execute(sql, tuple(params)).fetchall()
         return [
             AgentTraceRecord(
-                id=r["id"], run_id=r["run_id"], thread_id=r["thread_id"],
-                node_name=r["node_name"], agent_role=r["agent_role"],
-                artifact_type=r["artifact_type"], artifact_id=r["artifact_id"],
-                attempt=r["attempt"], prompt_id=r["prompt_id"],
-                input_json=r["input_json"], output_json=r["output_json"],
-                verdict=r["verdict"], verdict_issues_json=r["verdict_issues_json"],
-                model_provider=r["model_provider"], model_id=r["model_id"],
-                tokens_in=r["tokens_in"], tokens_out=r["tokens_out"],
+                id=r["id"],
+                run_id=r["run_id"],
+                thread_id=r["thread_id"],
+                node_name=r["node_name"],
+                agent_role=r["agent_role"],
+                artifact_type=r["artifact_type"],
+                artifact_id=r["artifact_id"],
+                attempt=r["attempt"],
+                prompt_id=r["prompt_id"],
+                input_json=r["input_json"],
+                output_json=r["output_json"],
+                verdict=r["verdict"],
+                verdict_issues_json=r["verdict_issues_json"],
+                model_provider=r["model_provider"],
+                model_id=r["model_id"],
+                tokens_in=r["tokens_in"],
+                tokens_out=r["tokens_out"],
                 cost_usd_estimated=r["cost_usd_estimated"],
-                latency_ms=r["latency_ms"], parent_trace_id=r["parent_trace_id"],
-                status=r["status"], error_class=r["error_class"],
+                latency_ms=r["latency_ms"],
+                parent_trace_id=r["parent_trace_id"],
+                status=r["status"],
+                error_class=r["error_class"],
                 error_message=r["error_message"],
                 created_at=datetime.fromisoformat(r["created_at"]),
             )

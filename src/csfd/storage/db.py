@@ -1,4 +1,5 @@
 """SQLite connection manager with WAL + foreign keys."""
+
 from __future__ import annotations
 
 import sqlite3

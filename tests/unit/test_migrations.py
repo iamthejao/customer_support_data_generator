@@ -8,10 +8,19 @@ def test_apply_migrations_creates_all_tables(tmp_db_path: Path) -> None:
     db = Database(path=tmp_db_path)
     apply_migrations(db)
     with db.connect() as conn:
-        names = {row[0] for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()}
-    for required in {"runs", "problems", "kb_articles", "tickets", "turns", "agent_traces", "schema_migrations"}:
+        names = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+    for required in {
+        "runs",
+        "problems",
+        "kb_articles",
+        "tickets",
+        "turns",
+        "agent_traces",
+        "schema_migrations",
+    }:
         assert required in names
 
 

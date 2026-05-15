@@ -1,5 +1,4 @@
 import pytest
-
 from csfd.models.fake import FakeChatModel
 from csfd.models.registry import build_llm
 from csfd.settings import AgentLLMConfig
@@ -13,8 +12,10 @@ def test_build_anthropic_llm_constructs_client() -> None:
 
 def test_build_openai_compat_llm_uses_base_url() -> None:
     cfg = AgentLLMConfig(
-        provider="openai_compat", model="llama3.1:8b",
-        temperature=0.1, base_url="http://localhost:11434/v1",
+        provider="openai_compat",
+        model="llama3.1:8b",
+        temperature=0.1,
+        base_url="http://localhost:11434/v1",
         api_key="local",
     )
     llm = build_llm(cfg)

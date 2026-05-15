@@ -1,8 +1,7 @@
 import pytest
-from pybreaker import CircuitBreakerError
-
 from csfd.budget.breaker import build_breaker
 from csfd.errors import TransportError
+from pybreaker import CircuitBreakerError
 
 
 def test_breaker_trips_after_threshold() -> None:
@@ -16,11 +15,11 @@ def test_breaker_trips_after_threshold() -> None:
     for _ in range(2):
         with pytest.raises(TransportError):
             always_fail()
-    
+
     # 3rd call reaches fail_max threshold and trips the circuit
     with pytest.raises(CircuitBreakerError):
         always_fail()
-    
+
     # 4th call also raises CircuitBreakerError (circuit is open)
     with pytest.raises(CircuitBreakerError):
         always_fail()

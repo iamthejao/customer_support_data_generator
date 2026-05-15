@@ -1,4 +1,5 @@
 """structlog configuration with contextvars-based correlation."""
+
 from __future__ import annotations
 
 import logging

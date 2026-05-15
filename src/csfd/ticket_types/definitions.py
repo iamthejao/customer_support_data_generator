@@ -1,4 +1,5 @@
 """Ticket type enum and per-type metadata."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1,4 +1,5 @@
 """Apply numbered .sql migrations idempotently."""
+
 from __future__ import annotations
 
 import re

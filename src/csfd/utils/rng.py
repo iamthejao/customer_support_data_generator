@@ -1,4 +1,5 @@
 """Seeded RNG helpers for reproducible sampling."""
+
 from __future__ import annotations
 
 import hashlib

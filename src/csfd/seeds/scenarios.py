@@ -1,4 +1,5 @@
 """Parse scenarios_seed.md into a typed ScenarioCatalogue."""
+
 from __future__ import annotations
 
 import re

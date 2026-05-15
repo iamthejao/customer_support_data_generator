@@ -1,4 +1,5 @@
 """Per-run token + USD budget tracker."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

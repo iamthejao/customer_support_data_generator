@@ -1,4 +1,5 @@
 """Circuit breaker around LLM transport. Trips on repeated TransportError."""
+
 from __future__ import annotations
 
 from pybreaker import CircuitBreaker

@@ -1,4 +1,5 @@
 """In-process fake chat model for unit and integration tests."""
+
 from __future__ import annotations
 
 from typing import Any

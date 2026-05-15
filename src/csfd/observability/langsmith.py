@@ -1,4 +1,5 @@
 """Opt-in LangSmith tracing setup. No-op unless an API key is provided."""
+
 from __future__ import annotations
 
 import os

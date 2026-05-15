@@ -17,20 +17,40 @@ from csfd.storage.repository import (
 
 def _make_problem(db: Database) -> tuple[str, str]:
     run_id = str(uuid4())
-    RunRepo(db).create(RunRecord(
-        id=run_id, phase="phase1", parent_run_id=None, status="running",
-        started_at=datetime.now(UTC), completed_at=None, run_seed=1,
-        pipeline_version="0.1.0", git_sha=None, config_snapshot_json="{}",
-        stats_json=None, error_summary=None,
-    ))
+    RunRepo(db).create(
+        RunRecord(
+            id=run_id,
+            phase="phase1",
+            parent_run_id=None,
+            status="running",
+            started_at=datetime.now(UTC),
+            completed_at=None,
+            run_seed=1,
+            pipeline_version="0.1.0",
+            git_sha=None,
+            config_snapshot_json="{}",
+            stats_json=None,
+            error_summary=None,
+        )
+    )
     pid = str(uuid4())
-    ProblemRepo(db).create(ProblemRecord(
-        id=pid, run_id=run_id, title="t", description="d", category="c",
-        severity="low", has_kb=True, coverage_reasoning=None,
-        coverage_confidence=None, metadata_json=None,
-        quality_flag=None, unresolved_issues_json=None,
-        created_at=datetime.now(UTC),
-    ))
+    ProblemRepo(db).create(
+        ProblemRecord(
+            id=pid,
+            run_id=run_id,
+            title="t",
+            description="d",
+            category="c",
+            severity="low",
+            has_kb=True,
+            coverage_reasoning=None,
+            coverage_confidence=None,
+            metadata_json=None,
+            quality_flag=None,
+            unresolved_issues_json=None,
+            created_at=datetime.now(UTC),
+        )
+    )
     return run_id, pid
 
 
@@ -41,15 +61,23 @@ def test_create_and_get_kb_article(tmp_db_path: Path) -> None:
 
     repo = KBArticleRepo(db)
     aid = str(uuid4())
-    repo.create(KBArticleRecord(
-        id=aid, run_id=run_id, problem_id=pid,
-        title="How to reset", content_markdown="## Step 1\n...",
-        content_hash="abcdef012345",
-        troubleshooting_steps_json=json.dumps([{"step": "do X", "expected_result": "Y"}]),
-        prerequisites_json=None, metadata_json=None,
-        version=1, quality_flag=None, unresolved_issues_json=None,
-        created_at=datetime.now(UTC),
-    ))
+    repo.create(
+        KBArticleRecord(
+            id=aid,
+            run_id=run_id,
+            problem_id=pid,
+            title="How to reset",
+            content_markdown="## Step 1\n...",
+            content_hash="abcdef012345",
+            troubleshooting_steps_json=json.dumps([{"step": "do X", "expected_result": "Y"}]),
+            prerequisites_json=None,
+            metadata_json=None,
+            version=1,
+            quality_flag=None,
+            unresolved_issues_json=None,
+            created_at=datetime.now(UTC),
+        )
+    )
     got = repo.get_by_problem(pid)
     assert got is not None
     assert got.id == aid
