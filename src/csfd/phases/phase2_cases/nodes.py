@@ -262,3 +262,59 @@ async def creative_noise_node(
         "noise_applied": True,
         "noise_type": mod.noise_type or noise_type,
     }
+
+
+async def _run_turn_checker(
+    *,
+    factory: AgentFactory,
+    name: str,
+    prompt_name: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Helper to run a turn-level checker agent and return verdicts."""
+    checker = factory.build_checker(name=name, prompt_name=prompt_name)
+    ctx = AgentContext(inputs=payload)
+    verdict = await checker.invoke(ctx)
+    return {"verdicts": [verdict]}
+
+
+async def turn_consistency_check_node(
+    payload: dict[str, Any],
+    *,
+    factory: AgentFactory,
+) -> dict[str, Any]:
+    """Check a TurnDraft for consistency via the `turn_consistency` Checker agent."""
+    return await _run_turn_checker(
+        factory=factory,
+        name="turn_consistency",
+        prompt_name="phase2.turn_consistency",
+        payload=payload,
+    )
+
+
+async def turn_background_check_node(
+    payload: dict[str, Any],
+    *,
+    factory: AgentFactory,
+) -> dict[str, Any]:
+    """Check a TurnDraft for background coherence via the `turn_background` Checker agent."""
+    return await _run_turn_checker(
+        factory=factory,
+        name="turn_background",
+        prompt_name="phase2.turn_consistency",  # placeholder; real prompt in Plan 5
+        payload=payload,
+    )
+
+
+async def turn_scenario_check_node(
+    payload: dict[str, Any],
+    *,
+    factory: AgentFactory,
+) -> dict[str, Any]:
+    """Check a TurnDraft for scenario relevance via the `turn_scenario` Checker agent."""
+    return await _run_turn_checker(
+        factory=factory,
+        name="turn_scenario",
+        prompt_name="phase2.turn_consistency",  # placeholder; real prompt in Plan 5
+        payload=payload,
+    )
