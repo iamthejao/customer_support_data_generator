@@ -10,6 +10,7 @@ from csfd.phases.phase1_kb.dedup import lexical_dedup
 from csfd.phases.phase1_kb.state import (
     CommittedProblem,
     CoverageDecision,
+    KBArticleDraft,
     KBState,
     ProblemDraft,
 )
@@ -127,3 +128,30 @@ async def coverage_decider_node(
         for (p, d) in decided
     ]
     return {"problems_committed": updated}
+
+
+async def article_writer_node(
+    state: KBState,
+    *,
+    factory: AgentFactory,
+    problem: CommittedProblem,
+) -> dict[str, Any]:
+    """Write a KB article for the given covered problem."""
+    writer = factory.build_generator(
+        name="article_writer",
+        prompt_name="phase1.problem_generator",  # placeholder; real prompt in Plan 5
+        output_schema_factory=lambda: KBArticleDraft,
+    )
+    ctx = AgentContext(
+        inputs={
+            "problem": problem.draft.model_dump(),
+            "company_name": state.company.name,
+            "company_sections": state.company.sections,
+        },
+        prior_verdicts=state.verdicts,
+        retry_attempt=state.retry_attempt,
+    )
+    draft = await writer.invoke(ctx)
+    if not isinstance(draft, KBArticleDraft):
+        raise TypeError(f"Expected KBArticleDraft, got {type(draft).__name__}")
+    return {"current_article_draft": draft}
