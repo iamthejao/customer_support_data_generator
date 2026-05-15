@@ -37,3 +37,33 @@ def test_studio_factory_functions_exist_and_return_graph() -> None:
     text2 = g2.get_graph().draw_mermaid()
     assert "brainstorm" in text1 or "problem" in text1
     assert "turn" in text2 or "writer" in text2
+
+
+def test_studio_module_exposes_prebuilt_graph_constants() -> None:
+    """``csfd.graph.studio`` eagerly builds the graphs at module import time so
+    Studio request handlers — which run under ``blockbuster`` — never trigger
+    sync filesystem / YAML / sqlite I/O on the hot path."""
+    from csfd.graph import studio
+
+    assert hasattr(studio, "phase1")
+    assert hasattr(studio, "phase2")
+    assert hasattr(studio.phase1, "get_graph")
+    assert hasattr(studio.phase2, "get_graph")
+
+
+def test_langgraph_json_points_at_prebuilt_constants_not_factories() -> None:
+    """``langgraph.json`` must reference module-level constants (no callable
+    invocation per request) so that the per-request handler does no I/O.
+    The constants live in ``csfd/graph/studio.py``."""
+    p = Path("langgraph.json")
+    data = json.loads(p.read_text())
+    for name, ref in data["graphs"].items():
+        module_path, _, attr = ref.partition(":")
+        assert "studio" in module_path, (
+            f"graph {name!r} should reference src/csfd/graph/studio.py "
+            f"(eager-built constants), not {module_path}"
+        )
+        assert attr in {
+            "phase1",
+            "phase2",
+        }, f"graph {name!r} should reference the constant attribute, got {attr!r}"

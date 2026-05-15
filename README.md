@@ -24,10 +24,13 @@ csfd generate --seed 42 --problems 10
 
 ```bash
 uv sync
-langgraph dev
+csfd db-migrate                       # create runs.sqlite with all tables (prerequisite)
+langgraph dev --allow-blocking        # start Studio
 ```
 
 Studio opens at `http://localhost:8123` exposing both Phase 1 and Phase 2 graphs for time-travel debugging, per-node input/output inspection, and manual state edits.
+
+**Why `--allow-blocking`?** Studio runs requests under [`blockbuster`](https://github.com/cbornet/blockbuster), which traps sync I/O inside the asyncio loop. Our persistence layer uses sync `sqlite3` (no async driver in stdlib), so node execution would otherwise raise `BlockingError`. The graph *loading* path is already async-safe — `src/csfd/graph/studio.py` pre-builds both compiled graphs at module import time so per-request handlers do no I/O. The `--allow-blocking` flag is only needed for graph *execution*. (V2: swap to `aiosqlite` and drop the flag.)
 
 ## Architecture
 

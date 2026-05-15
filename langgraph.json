@@ -1,8 +1,8 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "phase1": "./src/csfd/graph/compose.py:make_phase1_studio_graph",
-    "phase2": "./src/csfd/graph/compose.py:make_phase2_studio_graph"
+    "phase1": "./src/csfd/graph/studio.py:phase1",
+    "phase2": "./src/csfd/graph/studio.py:phase2"
   },
   "env": ".env"
 }
