@@ -16,7 +16,13 @@ from csfd.seeds.company import parse_company_seed
 from csfd.seeds.scenarios import parse_scenarios_seed
 from csfd.settings import load_settings
 from csfd.storage.db import Database
+from csfd.storage.exporters import export_run_to_jsonl, export_run_to_parquet
 from csfd.storage.migrations.runner import apply_migrations
+from csfd.storage.repository import (
+    KBArticleRepo,
+    ProblemRepo,
+    RunRepo,
+)
 
 app = typer.Typer(help="Customer-Service Fake Data — synthetic CS ticket generator.")
 phase1_app = typer.Typer(help="Phase 1 (KB generation) commands.")
@@ -233,3 +239,55 @@ def generate(
     p1, p2 = asyncio.run(_both())
     typer.echo(p1)
     typer.echo(p2)
+
+
+@app.command()
+def export(
+    run_id: str = typer.Argument(...),
+    format: str = typer.Option(
+        "jsonl",
+        "--format",
+        help="jsonl | parquet | both",
+    ),
+    sqlite_path: str = typer.Option("data/runs.sqlite", "--sqlite-path"),
+    out: str = typer.Option("data/exports", "--out"),
+) -> None:
+    """Export a run's artifacts to JSONL and/or Parquet under <out>/<run_id>/."""
+    db = Database(path=Path(sqlite_path))
+    out_dir = Path(out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    formats = {format} if format != "both" else {"jsonl", "parquet"}
+    if "jsonl" in formats:
+        export_run_to_jsonl(db, run_id, out_dir=out_dir)
+    if "parquet" in formats:
+        export_run_to_parquet(db, run_id, out_dir=out_dir)
+    typer.echo(f"Exported run {run_id} to {out_dir / run_id}.")
+
+
+@app.command()
+def inspect(
+    run_id: str = typer.Argument(...),
+    sqlite_path: str = typer.Option("data/runs.sqlite", "--sqlite-path"),
+) -> None:
+    """Print a summary of a run: counts per artifact type."""
+    db = Database(path=Path(sqlite_path))
+    run = RunRepo(db).get(run_id)
+    problems = ProblemRepo(db).list_for_run(run_id)
+    kb_repo = KBArticleRepo(db)
+    kb_count = sum(1 for p in problems if kb_repo.get_by_problem(p.id) is not None)
+    with db.connect() as conn:
+        ticket_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM tickets WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()["n"]
+        turn_count = conn.execute(
+            """SELECT COUNT(*) AS n FROM turns t
+               JOIN tickets ti ON ti.id = t.ticket_id
+               WHERE ti.run_id = ?""",
+            (run_id,),
+        ).fetchone()["n"]
+    typer.echo(f"Run: {run.id} ({run.phase}, {run.status})")
+    typer.echo(f"  problems:    {len(problems)}")
+    typer.echo(f"  kb_articles: {kb_count}")
+    typer.echo(f"  tickets:     {ticket_count}")
+    typer.echo(f"  turns:       {turn_count}")
