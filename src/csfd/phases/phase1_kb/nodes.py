@@ -2,18 +2,29 @@
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
 from typing import Any
 
 from csfd.agents.base import AgentContext
 from csfd.agents.factory import AgentFactory
 from csfd.phases.phase1_kb.dedup import lexical_dedup
 from csfd.phases.phase1_kb.state import (
+    CommittedArticle,
     CommittedProblem,
     CoverageDecision,
     KBArticleDraft,
     KBState,
     ProblemDraft,
 )
+from csfd.storage.db import Database
+from csfd.storage.repository import (
+    KBArticleRecord,
+    KBArticleRepo,
+    ProblemRecord,
+    ProblemRepo,
+)
+from csfd.utils.hashing import short_hash
 
 
 async def seed_load_node(state: KBState) -> dict[str, Any]:
@@ -155,3 +166,81 @@ async def article_writer_node(
     if not isinstance(draft, KBArticleDraft):
         raise TypeError(f"Expected KBArticleDraft, got {type(draft).__name__}")
     return {"current_article_draft": draft}
+
+
+def persist_problem_node(
+    state: KBState,
+    *,
+    db: Database,
+    problem: CommittedProblem,
+) -> dict[str, Any]:
+    """Persist a CommittedProblem to the database."""
+    repo = ProblemRepo(db)
+    repo.create(
+        ProblemRecord(
+            id=problem.id,
+            run_id=state.run_id,
+            title=problem.draft.title,
+            description=problem.draft.description,
+            category=problem.draft.category,
+            severity=problem.draft.severity,
+            has_kb=problem.has_kb,
+            coverage_reasoning=problem.coverage_reasoning,
+            coverage_confidence=problem.coverage_confidence,
+            metadata_json=json.dumps(problem.draft.metadata) if problem.draft.metadata else None,
+            quality_flag=problem.quality_flag,
+            unresolved_issues_json=(
+                json.dumps([v.model_dump() for v in problem.unresolved_issues])
+                if problem.unresolved_issues
+                else None
+            ),
+            created_at=datetime.now(UTC),
+        )
+    )
+    return {
+        "stats": state.stats.model_copy(
+            update={
+                "problems_committed": state.stats.problems_committed + 1,
+            }
+        )
+    }
+
+
+def persist_article_node(
+    state: KBState,
+    *,
+    db: Database,
+    article: CommittedArticle,
+) -> dict[str, Any]:
+    """Persist a CommittedArticle to the database."""
+    repo = KBArticleRepo(db)
+    repo.create(
+        KBArticleRecord(
+            id=article.id,
+            run_id=state.run_id,
+            problem_id=article.problem_id,
+            title=article.draft.title,
+            content_markdown=article.draft.content_markdown,
+            content_hash=short_hash(article.draft.content_markdown),
+            troubleshooting_steps_json=json.dumps(article.draft.troubleshooting_steps),
+            prerequisites_json=(
+                json.dumps(article.draft.prerequisites) if article.draft.prerequisites else None
+            ),
+            metadata_json=(json.dumps(article.draft.metadata) if article.draft.metadata else None),
+            version=1,
+            quality_flag=article.quality_flag,
+            unresolved_issues_json=(
+                json.dumps([v.model_dump() for v in article.unresolved_issues])
+                if article.unresolved_issues
+                else None
+            ),
+            created_at=datetime.now(UTC),
+        )
+    )
+    return {
+        "stats": state.stats.model_copy(
+            update={
+                "articles_committed": state.stats.articles_committed + 1,
+            }
+        )
+    }
