@@ -224,3 +224,109 @@ class KBArticleRepo:
             unresolved_issues_json=row["unresolved_issues_json"],
             created_at=datetime.fromisoformat(row["created_at"]),
         )
+
+
+@dataclass(slots=True)
+class TicketRecord:
+    id: str
+    run_id: str
+    problem_id: str
+    kb_article_id: str | None
+    ticket_type: str
+    priority: str
+    status: str
+    subject: str
+    customer_persona_json: str
+    agent_persona_json: str
+    ground_truth_json: str | None
+    metadata_json: str | None
+    quality_flag: str | None
+    unresolved_issues_json: str | None
+    created_at: datetime
+    resolved_at: datetime | None
+
+
+class TicketRepo:
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    def create(self, t: TicketRecord) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO tickets
+                  (id, run_id, problem_id, kb_article_id, ticket_type, priority,
+                   status, subject, customer_persona_json, agent_persona_json,
+                   ground_truth_json, metadata_json,
+                   quality_flag, unresolved_issues_json, created_at, resolved_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    t.id, t.run_id, t.problem_id, t.kb_article_id, t.ticket_type,
+                    t.priority, t.status, t.subject,
+                    t.customer_persona_json, t.agent_persona_json,
+                    t.ground_truth_json, t.metadata_json,
+                    t.quality_flag, t.unresolved_issues_json,
+                    t.created_at.isoformat(),
+                    t.resolved_at.isoformat() if t.resolved_at else None,
+                ),
+            )
+
+
+@dataclass(slots=True)
+class TurnRecord:
+    id: str
+    ticket_id: str
+    turn_index: int
+    speaker: str
+    speaker_persona: str | None
+    content: str
+    intent: str | None
+    kb_references_json: str | None
+    noise_applied: bool
+    noise_type: str | None
+    quality_flag: str | None
+    created_at: datetime
+
+
+class TurnRepo:
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    def create(self, t: TurnRecord) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO turns
+                  (id, ticket_id, turn_index, speaker, speaker_persona, content,
+                   intent, kb_references_json, noise_applied, noise_type,
+                   quality_flag, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    t.id, t.ticket_id, t.turn_index, t.speaker, t.speaker_persona,
+                    t.content, t.intent, t.kb_references_json,
+                    1 if t.noise_applied else 0, t.noise_type,
+                    t.quality_flag, t.created_at.isoformat(),
+                ),
+            )
+
+    def list_for_ticket(self, ticket_id: str) -> list[TurnRecord]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM turns WHERE ticket_id = ? ORDER BY turn_index",
+                (ticket_id,),
+            ).fetchall()
+        return [
+            TurnRecord(
+                id=r["id"], ticket_id=r["ticket_id"], turn_index=r["turn_index"],
+                speaker=r["speaker"], speaker_persona=r["speaker_persona"],
+                content=r["content"], intent=r["intent"],
+                kb_references_json=r["kb_references_json"],
+                noise_applied=bool(r["noise_applied"]),
+                noise_type=r["noise_type"],
+                quality_flag=r["quality_flag"],
+                created_at=datetime.fromisoformat(r["created_at"]),
+            )
+            for r in rows
+        ]
