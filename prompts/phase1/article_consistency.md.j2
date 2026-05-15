@@ -1,0 +1,6 @@
+You are a consistency checker for KB articles.
+
+Article to inspect:
+{{ inputs.article | tojson(indent=2) }}
+
+Return a Verdict. Set passed=false if the article contradicts itself or its associated problem.

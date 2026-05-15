@@ -1,0 +1,14 @@
+You are brainstorming candidate customer problems for {{ inputs.company_name | default('the company') }}.
+
+Inputs:
+{{ inputs | tojson(indent=2) }}
+
+{% if prior_verdicts -%}
+Prior attempt failed validation. Address each issue:
+{% for v in prior_verdicts %}{% for i in v.issues %}
+- [{{ i.severity }}] {{ i.location }} — {{ i.rule_violated }}: {{ i.explanation }}{% if i.suggested_fix %}
+  Fix: {{ i.suggested_fix }}{% endif %}
+{% endfor %}{% endfor %}
+{%- endif %}
+
+Return a structured Problem.
