@@ -244,3 +244,59 @@ def persist_article_node(
             }
         )
     }
+
+
+async def _run_checker(
+    *,
+    factory: AgentFactory,
+    name: str,
+    prompt_name: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Helper to run a checker agent and return verdicts."""
+    checker = factory.build_checker(name=name, prompt_name=prompt_name)
+    ctx = AgentContext(inputs=payload)
+    verdict = await checker.invoke(ctx)
+    return {"verdicts": [verdict]}
+
+
+async def problem_consistency_check_node(
+    payload: dict[str, Any],
+    *,
+    factory: AgentFactory,
+) -> dict[str, Any]:
+    """Check a ProblemDraft for consistency issues via the `problem_consistency` Checker agent."""
+    return await _run_checker(
+        factory=factory,
+        name="problem_consistency",
+        prompt_name="phase1._test",  # placeholder
+        payload=payload,
+    )
+
+
+async def problem_background_check_node(
+    payload: dict[str, Any],
+    *,
+    factory: AgentFactory,
+) -> dict[str, Any]:
+    """Check a ProblemDraft for background completeness via the `problem_background` Checker agent."""
+    return await _run_checker(
+        factory=factory,
+        name="problem_background",
+        prompt_name="phase1._test",  # placeholder
+        payload=payload,
+    )
+
+
+async def problem_scenario_check_node(
+    payload: dict[str, Any],
+    *,
+    factory: AgentFactory,
+) -> dict[str, Any]:
+    """Check a ProblemDraft for scenario relevance via the `problem_scenario` Checker agent."""
+    return await _run_checker(
+        factory=factory,
+        name="problem_scenario",
+        prompt_name="phase1._test",  # placeholder
+        payload=payload,
+    )
