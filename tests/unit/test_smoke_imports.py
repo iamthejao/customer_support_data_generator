@@ -21,3 +21,22 @@ def test_all_top_level_modules_import() -> None:
     import csfd.utils.rng
 
     assert csfd is not None
+
+
+def test_agents_package_reexports() -> None:
+    import csfd.agents as a
+
+    expected = (
+        "AgentContext",
+        "AgentRole",
+        "AgentFactory",
+        "Issue",
+        "Verdict",
+        "Generator",
+        "Checker",
+        "CreativeNoise",
+        "TurnModification",
+        "record_agent_trace",
+    )
+    for sym in expected:
+        assert hasattr(a, sym), f"csfd.agents missing symbol: {sym}"
