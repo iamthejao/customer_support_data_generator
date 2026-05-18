@@ -1,0 +1,15 @@
+You are validating a candidate Problem Database entry. Produce a single Verdict.
+
+Candidate (and surrounding context):
+{{ inputs | tojson(indent=2) }}
+
+Validate the following rules in one pass:
+
+1. **Consistency** — title, summary, and background must describe the same issue. Category must match the issue's topical area. `complexity` must equal the requested target_complexity.
+2. **Background coherence** — background section must be plausible given the company profile and not contradict it.
+3. **Scenario realism** — the problem must be a plausible customer-service scenario for the company; no fantasy/impossible setups.
+4. **Resolution hints** — keys (if present) must be a subset of {"docs_request","l1","l2","l3"}; values must be short, on-topic hints; no contradictions between hints and the complexity.
+
+For each rule violated, emit one Issue with severity ("error" for hard violations, "warning" for stylistic concerns), location (which field), rule_violated (short id like "complexity_mismatch"), explanation, and an optional suggested_fix.
+
+Set `passed=true` only when there are no `error`-severity issues. Set `checker="combined_problem_check"`.

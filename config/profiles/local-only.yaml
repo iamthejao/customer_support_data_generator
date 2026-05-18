@@ -1,25 +1,11 @@
+observability:
+  structlog_json: false
 agents:
   generator:
     provider: openai_compat
-    model: llama3.3:70b
+    model: qwen3:14b
     base_url: http://localhost:11434/v1
-  consistency:
+  combined_checker:
     provider: openai_compat
-    model: llama3.3:70b
-    base_url: http://localhost:11434/v1
-  background:
-    provider: openai_compat
-    model: llama3.3:70b
-    base_url: http://localhost:11434/v1
-  scenario:
-    provider: openai_compat
-    model: llama3.3:70b
-    base_url: http://localhost:11434/v1
-  creative_noise:
-    provider: openai_compat
-    model: llama3.3:70b
-    base_url: http://localhost:11434/v1
-  coverage_judge:
-    provider: openai_compat
-    model: llama3.3:70b
+    model: qwen3:14b
     base_url: http://localhost:11434/v1

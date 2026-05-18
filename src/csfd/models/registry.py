@@ -7,10 +7,18 @@ from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
+from csfd.models.claude_code_cli import ClaudeCodeCLIModel
 from csfd.settings import AgentLLMConfig
 
 
 def build_llm(cfg: AgentLLMConfig) -> BaseChatModel:
+    if cfg.provider == "claude_code_cli":
+        return ClaudeCodeCLIModel(
+            model=cfg.model,
+            temperature=cfg.temperature,
+            max_tokens=cfg.max_tokens,
+            timeout_s=cfg.timeout_s,
+        )
     if cfg.provider == "anthropic":
         return ChatAnthropic(
             model=cfg.model,
@@ -21,10 +29,10 @@ def build_llm(cfg: AgentLLMConfig) -> BaseChatModel:
         )
     if cfg.provider == "openai_compat":
         return ChatOpenAI(
-            model_name=cfg.model,
-            openai_api_base=cfg.base_url,
-            openai_api_key=SecretStr(cfg.api_key or "local"),
+            model=cfg.model,
+            base_url=cfg.base_url,
+            api_key=SecretStr(cfg.api_key or "local"),
             temperature=cfg.temperature,
-            request_timeout=float(cfg.timeout_s),
+            timeout=float(cfg.timeout_s),
         )
     raise ValueError(f"Unknown provider: {cfg.provider}")

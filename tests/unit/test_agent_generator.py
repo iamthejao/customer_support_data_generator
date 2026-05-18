@@ -33,7 +33,14 @@ def _handle(
 async def test_generator_returns_typed_artifact() -> None:
     canned = _Artifact(summary="ok")
     llm = FakeChatModel(structured={_Artifact: canned})
-    gen = Generator(name="g", prompt=_handle(), output_schema=_Artifact, llm=llm)
+    gen = Generator(
+        name="g",
+        prompt=_handle(),
+        output_schema=_Artifact,
+        llm=llm,
+        provider="anthropic",
+        model_id="fake",
+    )
     out = await gen.invoke(AgentContext(inputs={"x": "hello"}))
     assert isinstance(out, _Artifact)
     assert out.summary == "ok"
@@ -43,7 +50,14 @@ async def test_generator_returns_typed_artifact() -> None:
 async def test_generator_renders_prior_verdicts_into_prompt() -> None:
     canned = _Artifact(summary="ok2")
     llm = FakeChatModel(structured={_Artifact: canned})
-    gen = Generator(name="g", prompt=_handle(), output_schema=_Artifact, llm=llm)
+    gen = Generator(
+        name="g",
+        prompt=_handle(),
+        output_schema=_Artifact,
+        llm=llm,
+        provider="anthropic",
+        model_id="fake",
+    )
     verdict = Verdict(
         checker="consistency",
         passed=False,

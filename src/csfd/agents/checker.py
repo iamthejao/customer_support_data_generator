@@ -24,9 +24,24 @@ class Checker(AgentRole):
         name: str,
         prompt: PromptHandle,
         llm: BaseChatModel,
+        provider: str,
+        model_id: str,
     ) -> None:
         self.name = name
-        self._inner = Generator(name=name, prompt=prompt, output_schema=Verdict, llm=llm)
+        self.provider = provider
+        self.model_id = model_id
+        self._inner = Generator(
+            name=name,
+            prompt=prompt,
+            output_schema=Verdict,
+            llm=llm,
+            provider=provider,
+            model_id=model_id,
+        )
+
+    @property
+    def prompt(self) -> PromptHandle:
+        return self._inner.prompt
 
     async def invoke(self, ctx: AgentContext) -> Verdict:
         out: BaseModel = await self._inner.invoke(ctx)

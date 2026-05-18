@@ -1,8 +1,7 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "phase1": "./src/csfd/graph/studio.py:phase1",
-    "phase2": "./src/csfd/graph/studio.py:phase2"
+    "pipeline": "./src/csfd/graph/studio.py:pipeline"
   },
   "env": ".env"
 }

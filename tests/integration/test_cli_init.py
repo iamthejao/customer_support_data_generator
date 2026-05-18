@@ -28,9 +28,12 @@ def test_cli_db_migrate_creates_tables(tmp_path: Path, monkeypatch) -> None:  # 
     with sqlite3.connect(str(tmp_path / "data" / "test.sqlite")) as conn:
         rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     table_names = {r[0] for r in rows}
-    assert "runs" in table_names
-    assert "problems" in table_names
-    assert "kb_articles" in table_names
-    assert "tickets" in table_names
-    assert "turns" in table_names
-    assert "agent_traces" in table_names
+    for required in (
+        "runs",
+        "problems",
+        "incoming_requests",
+        "resolutions",
+        "lineage",
+        "agent_traces",
+    ):
+        assert required in table_names

@@ -1,21 +1,14 @@
-"""csfd.graph - runtime graphs, orchestrators, and shared checkpointer."""
+"""csfd.graph — deterministic pipeline graph and shared checkpointer."""
 
-from csfd.graph.checkpointer import build_sqlite_checkpointer
-from csfd.graph.compose import (
-    make_phase1_studio_graph,
-    make_phase2_studio_graph,
-    run_phase1,
-    run_phase2,
-)
-from csfd.graph.runtime_phase1 import build_runtime_phase1_graph
-from csfd.graph.runtime_phase2 import build_runtime_phase2_graph
+from csfd.graph.checkpointer import async_sqlite_checkpointer
+from csfd.graph.phase1_graph import build_phase1_subgraph
+from csfd.graph.phase2_graph import build_phase2_subgraph
+from csfd.graph.pipeline_graph import build_pipeline_graph, make_pipeline_studio_graph
 
 __all__ = [
-    "build_runtime_phase1_graph",
-    "build_runtime_phase2_graph",
-    "build_sqlite_checkpointer",
-    "make_phase1_studio_graph",
-    "make_phase2_studio_graph",
-    "run_phase1",
-    "run_phase2",
+    "async_sqlite_checkpointer",
+    "build_phase1_subgraph",
+    "build_phase2_subgraph",
+    "build_pipeline_graph",
+    "make_pipeline_studio_graph",
 ]

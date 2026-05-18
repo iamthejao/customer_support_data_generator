@@ -15,13 +15,9 @@ from csfd.storage.db import Database
 
 _TABLES: dict[str, str] = {
     "problems": "SELECT * FROM problems WHERE run_id = ?",
-    "kb_articles": "SELECT * FROM kb_articles WHERE run_id = ?",
-    "tickets": "SELECT * FROM tickets WHERE run_id = ?",
-    "turns": (
-        "SELECT turns.* FROM turns "
-        "JOIN tickets ON tickets.id = turns.ticket_id "
-        "WHERE tickets.run_id = ?"
-    ),
+    "incoming_requests": "SELECT * FROM incoming_requests WHERE run_id = ?",
+    "resolutions": "SELECT * FROM resolutions WHERE run_id = ?",
+    "lineage": "SELECT * FROM lineage WHERE run_id = ?",
     "agent_traces": "SELECT * FROM agent_traces WHERE run_id = ?",
 }
 

@@ -1,0 +1,18 @@
+You are validating a candidate customer-service Resolution. Produce a single Verdict.
+
+Candidate (and surrounding context):
+{{ inputs | tojson(indent=2) }}
+
+Validate the following rules in one pass:
+
+1. **Turn count** — `len(turns)` must equal `inputs.target_turn_count`.
+2. **Alternation** — turns must alternate between `customer` and `agent`, starting with `customer`.
+3. **First-turn parity** — `turns[0].content` must equal `body` (the standalone incoming request).
+4. **Persona match** — agent's behaviour and depth must match the requested `ticket_type` (docs/l1/l2/l3).
+5. **Tier/tone consistency** — customer's language reflects the specified `customer_tier` and `customer_tone` across all customer turns.
+6. **On-topic resolution** — the conversation actually addresses the supplied `problem`, with no off-topic detours or invented unrelated issues.
+7. **Naming** — customer turns are labelled with `customer_name`; agent turns with `agent_name`.
+
+For each rule violated, emit one Issue with severity ("error" for hard violations, "warning" for stylistic concerns), location (which field/turn index), rule_violated (short id), explanation, and an optional suggested_fix.
+
+Set `passed=true` only when there are no `error`-severity issues. Set `checker="combined_resolution_check"`.

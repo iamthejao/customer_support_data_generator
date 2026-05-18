@@ -2,15 +2,7 @@ agents:
   generator:
     provider: anthropic
     model: claude-sonnet-4-6
-  consistency:
-    provider: openai_compat
-    model: llama3.1:8b
-    base_url: http://localhost:11434/v1
-  background:
-    provider: openai_compat
-    model: llama3.1:8b
-    base_url: http://localhost:11434/v1
-  scenario:
+  combined_checker:
     provider: openai_compat
     model: llama3.1:8b
     base_url: http://localhost:11434/v1

@@ -1,0 +1,27 @@
+You are brainstorming a candidate problem for the Problem Database of {{ inputs.company_name | default('the company') }}.
+
+Inputs:
+{{ inputs | tojson(indent=2) }}
+
+Target complexity for this problem: **{{ inputs.target_complexity }}**.
+
+Complexity guidance:
+- `simple`: a common, self-contained issue that a tier-1 rep or a doc lookup can resolve in a couple of turns.
+- `medium`: a multi-step troubleshooting scenario requiring some investigation and judgement.
+- `complex`: a novel or domain-specific issue requiring deep expertise, multiple hypotheses, and careful follow-up.
+
+{% if prior_verdicts -%}
+Prior attempt failed validation. Address each issue:
+{% for v in prior_verdicts %}{% for i in v.issues %}
+- [{{ i.severity }}] {{ i.location }} — {{ i.rule_violated }}: {{ i.explanation }}{% if i.suggested_fix %}
+  Fix: {{ i.suggested_fix }}{% endif %}
+{% endfor %}{% endfor %}
+{%- endif %}
+
+Return a structured Problem with:
+- `title`: short imperative description of the issue.
+- `summary`: 1-2 sentence customer-facing summary.
+- `background`: 2-4 sentences of supporting context, environment details, plausible cause.
+- `category`: a 1-3 word topical category.
+- `complexity`: must equal "{{ inputs.target_complexity }}".
+- `resolution_hints`: an object whose keys are ticket-type names ("docs_request", "l1", "l2", "l3") and whose values are 1-2 sentence hints describing what a resolution of that type would look like for this specific problem. Include hints only for ticket types that are realistic for this complexity (e.g., omit "docs_request" for a complex novel issue).

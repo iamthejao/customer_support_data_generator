@@ -1,0 +1,30 @@
+You are generating a complete customer-service ticket and its full multi-turn resolution in a single response.
+
+Inputs:
+{{ inputs | tojson(indent=2) }}
+
+Hard requirements:
+
+- The resolution must address the problem described in `inputs.problem`.
+- The ticket type is **{{ inputs.ticket_type }}** — match the persona and complexity accordingly:
+  - `docs_request`: customer asks for documentation; agent provides a pointer and a brief summary.
+  - `l1`: first-line support; quick, KB-style resolution.
+  - `l2`: escalated; methodical troubleshooting with multiple steps and clarifications.
+  - `l3`: domain specialist; novel/edge-case, deep investigation, hypothesis-driven.
+- The conversation must contain **exactly {{ inputs.target_turn_count }} turns**, alternating starting with the customer.
+- The customer's tier is **{{ inputs.customer_tier }}** and tone is **{{ inputs.customer_tone }}** — reflect this in their language consistently.
+- Customer name is `{{ inputs.customer_name }}`; agent name is `{{ inputs.agent_name }}`.
+
+{% if prior_verdicts -%}
+Prior attempt failed validation. Address each issue:
+{% for v in prior_verdicts %}{% for i in v.issues %}
+- [{{ i.severity }}] {{ i.location }} — {{ i.rule_violated }}: {{ i.explanation }}{% if i.suggested_fix %}
+  Fix: {{ i.suggested_fix }}{% endif %}
+{% endfor %}{% endfor %}
+{%- endif %}
+
+Return a Resolution with:
+- `subject`: a short email-style subject line for the incoming request.
+- `body`: the customer's first message, expanded to a natural opening request (3-6 sentences). This is the standalone "incoming request" — write it as a complete message, not a summary.
+- `turns`: a list of exactly {{ inputs.target_turn_count }} turns. Each turn has `speaker` ("customer" or "agent"), `name`, and `content`. The first turn's content should be the same as `body`.
+- `resolved`: true if the conversation reaches a resolution; false if it ends unresolved/escalated.

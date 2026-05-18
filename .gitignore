@@ -22,6 +22,10 @@ data/
 .idea/
 .vscode/
 .DS_Store
+# Only used for cross-checking with OpenAI
+AGENTS.md
 
+docs/superpowers/
+.langgraph_api/
 # uv
 # (uv.lock IS committed)

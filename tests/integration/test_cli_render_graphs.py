@@ -15,8 +15,9 @@ def test_render_graphs_writes_mermaid_files(
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["render-graphs", "--out", str(tmp_path / "docs/diagrams")])
     assert result.exit_code == 0, result.output
+    assert (tmp_path / "docs/diagrams/pipeline.mmd").exists()
     assert (tmp_path / "docs/diagrams/phase1.mmd").exists()
     assert (tmp_path / "docs/diagrams/phase2.mmd").exists()
     text = (tmp_path / "docs/diagrams/phase1.mmd").read_text()
-    # Mermaid contains nodes from the structural Phase 1 subgraph
-    assert "problem" in text or "brainstorm" in text
+    # Mermaid contains nodes from the Phase 1 subgraph
+    assert "problem" in text.lower()

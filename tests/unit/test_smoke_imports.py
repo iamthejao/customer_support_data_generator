@@ -34,8 +34,6 @@ def test_agents_package_reexports() -> None:
         "Verdict",
         "Generator",
         "Checker",
-        "CreativeNoise",
-        "TurnModification",
         "record_agent_trace",
     )
     for sym in expected:

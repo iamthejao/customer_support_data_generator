@@ -1,11 +1,17 @@
 pipeline:
-  version: "0.1.0"
-  run_seed: null
+  version: "0.3.0"
+  run_seed: 42
   budget:
     max_tokens_per_run: 5000000
     max_usd_per_run: 10.0
-    max_retries_per_artifact: 3
+    max_retries_per_artifact: 2
 
+# Two agent buckets drive every LLM call in the pipeline:
+#   - generator         : problem brainstorm + resolution generator
+#   - combined_checker  : phase 1 + phase 2 quality checkers
+# Node-name fallbacks in `csfd.agents.factory._ROLE_FALLBACK` route specific
+# node names (e.g. resolution_generator, combined_problem_check) to these
+# buckets.
 agents:
   generator:
     provider: anthropic
@@ -13,58 +19,46 @@ agents:
     temperature: 0.85
     max_tokens: 4096
     timeout_s: 60
-  consistency:
+  combined_checker:
     provider: anthropic
     model: claude-haiku-4-5
     temperature: 0.1
-    timeout_s: 30
-  background:
-    provider: anthropic
-    model: claude-haiku-4-5
-    temperature: 0.1
-    timeout_s: 30
-  scenario:
-    provider: anthropic
-    model: claude-haiku-4-5
-    temperature: 0.1
-    timeout_s: 30
-  creative_noise:
-    provider: anthropic
-    model: claude-sonnet-4-6
-    temperature: 0.95
-    timeout_s: 45
-  coverage_judge:
-    provider: anthropic
-    model: claude-haiku-4-5
-    temperature: 0.2
+    max_tokens: 1024
     timeout_s: 30
 
-phase1:
-  problem_count: 100
-  kb_coverage_target_rate: 0.7
-  dedup_similarity_threshold: 0.88
-  dedup_method: lexical
+problem_database:
+  count: 10
+  complexity_proportions:
+    simple: 0.6
+    medium: 0.3
+    complex: 0.1
 
-phase2:
-  tickets_per_problem:
-    has_kb: [3, 5]
-    no_kb: [1, 2]
-  ticket_type_weights:
-    has_kb: { docs_request: 0.10, l1: 0.55, l2: 0.25, l3: 0.10 }
-    no_kb: { l3: 1.0 }
-  creative_noise_probability: 0.20
-  noise_type_weights:
-    typos_informal_phrasing: 0.25
-    tangential_complaint: 0.15
-    incomplete_info: 0.20
-    agent_self_correction: 0.10
-    sentiment_flip: 0.15
-    wrong_kb_citation: 0.10
-    code_switch_language: 0.05
-  voting_policy: strict_all_pass
-  retry_exhaustion_policy: commit_with_warning
-  min_turns_per_ticket: 2
-  max_turns_per_ticket: 12
+tickets:
+  total: 100
+  type_proportions:
+    docs_request: 0.50
+    l1:           0.30
+    l2:           0.10
+    l3:           0.10
+  assignment_strategy: complexity_weighted   # or "uniform"
+  turns_per_type:
+    docs_request: 2
+    l1:           3
+    l2:           5
+    l3:           7
+  tier_proportions:
+    standard:   0.6
+    premium:    0.3
+    enterprise: 0.1
+  tone_proportions_per_type:
+    docs_request: { neutral: 0.7, polite: 0.3 }
+    l1:           { neutral: 0.5, frustrated: 0.3, polite: 0.2 }
+    l2:           { frustrated: 0.5, urgent: 0.3, neutral: 0.2 }
+    l3:           { urgent: 0.4, frustrated: 0.4, neutral: 0.2 }
+
+validation:
+  enabled: true
+  max_retries: 2
 
 observability:
   structlog_json: true

@@ -1,4 +1,10 @@
-"""Pydantic Settings: YAML default + profile overlay + environment variables."""
+"""Pydantic Settings: YAML default + profile overlay + environment variables.
+
+This module hosts the proportion-based schema (``problem_database``, ``tickets``,
+``validation``) used by the deterministic LangGraph pipeline. All sections
+required by the pipeline are non-Optional so misconfiguration fails at load
+time rather than at runtime.
+"""
 
 from __future__ import annotations
 
@@ -23,7 +29,7 @@ class PipelineConfig(BaseModel):
 
 
 class AgentLLMConfig(BaseModel):
-    provider: Literal["anthropic", "openai_compat"]
+    provider: Literal["anthropic", "openai_compat", "claude_code_cli"]
     model: str
     temperature: float = 0.7
     max_tokens: int | None = None
@@ -32,32 +38,31 @@ class AgentLLMConfig(BaseModel):
     api_key: str | None = None
 
 
-class Phase1Config(BaseModel):
-    problem_count: int = 100
-    kb_coverage_target_rate: float = 0.7
-    dedup_similarity_threshold: float = 0.88
-    dedup_method: Literal["lexical", "embedding"] = "lexical"
+# ---- Proportion-based schema (used by the deterministic pipeline) ----
 
 
-class TicketsPerProblem(BaseModel):
-    has_kb: tuple[int, int] = (3, 5)
-    no_kb: tuple[int, int] = (1, 2)
+class ProblemDatabaseConfig(BaseModel):
+    count: int = 10
+    complexity_proportions: dict[str, float] = Field(
+        default_factory=lambda: {"simple": 0.3, "medium": 0.4, "complex": 0.3}
+    )
 
 
-class TicketTypeWeights(BaseModel):
-    has_kb: dict[str, float]
-    no_kb: dict[str, float]
+class TicketsConfig(BaseModel):
+    total: int = 100
+    type_proportions: dict[str, float]
+    assignment_strategy: Literal["uniform", "complexity_weighted"] = "complexity_weighted"
+    turns_per_type: dict[str, int]
+    tier_proportions: dict[str, float]
+    tone_proportions_per_type: dict[str, dict[str, float]]
 
 
-class Phase2Config(BaseModel):
-    tickets_per_problem: TicketsPerProblem = Field(default_factory=TicketsPerProblem)
-    ticket_type_weights: TicketTypeWeights
-    creative_noise_probability: float = 0.2
-    noise_type_weights: dict[str, float] = Field(default_factory=dict)
-    voting_policy: Literal["strict_all_pass", "quorum_2_of_3"] = "strict_all_pass"
-    retry_exhaustion_policy: Literal["commit_with_warning", "skip"] = "commit_with_warning"
-    min_turns_per_ticket: int = 2
-    max_turns_per_ticket: int = 12
+class ValidationConfig(BaseModel):
+    enabled: bool = True
+    max_retries: int = 2
+
+
+# ---- Common / cross-cutting ----
 
 
 class ObservabilityConfig(BaseModel):
@@ -69,6 +74,7 @@ class ObservabilityConfig(BaseModel):
 
 class StorageConfig(BaseModel):
     sqlite_path: str = "data/runs.sqlite"
+    checkpoint_sqlite_path: str = ".langgraph_api/checkpoints.sqlite"
     exports_dir: str = "data/exports"
     exports_format: list[str] = Field(default_factory=lambda: ["jsonl", "parquet"])
 
@@ -87,8 +93,9 @@ class EnvSecrets(BaseSettings):
 class AppSettings(BaseModel):
     pipeline: PipelineConfig
     agents: dict[str, AgentLLMConfig]
-    phase1: Phase1Config
-    phase2: Phase2Config
+    problem_database: ProblemDatabaseConfig
+    tickets: TicketsConfig
+    validation: ValidationConfig = Field(default_factory=ValidationConfig)
     observability: ObservabilityConfig
     storage: StorageConfig
     env: EnvSecrets = Field(default_factory=EnvSecrets)

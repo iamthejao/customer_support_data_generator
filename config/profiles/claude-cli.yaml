@@ -1,0 +1,14 @@
+# Route both agent roles through the local `claude` CLI (subscription auth),
+# not the Anthropic API. Requires the `claude` binary on $PATH and a
+# logged-in session (run `claude /login` once).
+agents:
+  generator:
+    provider: claude_code_cli
+    model: claude-sonnet-4-5
+    temperature: 0.85
+    timeout_s: 180
+  combined_checker:
+    provider: claude_code_cli
+    model: claude-haiku-4-5
+    temperature: 0.1
+    timeout_s: 120

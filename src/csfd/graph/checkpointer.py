@@ -1,18 +1,23 @@
-"""Shared SqliteSaver factory for LangGraph checkpoint persistence."""
+"""Async SQLite checkpointer factory for LangGraph persistence."""
 
 from __future__ import annotations
 
-import sqlite3
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 
-def build_sqlite_checkpointer(db_path: Path | str) -> SqliteSaver:
-    """Open a SqliteSaver wrapping a shared SQLite connection.
+@asynccontextmanager
+async def async_sqlite_checkpointer(
+    db_path: Path | str,
+) -> AsyncIterator[AsyncSqliteSaver]:
+    """Async context manager yielding an ``AsyncSqliteSaver`` for a SQLite file.
 
-    The connection uses ``check_same_thread=False`` so async LangGraph
-    invocations may reuse it across event-loop tasks.
+    Used by ``run_phase1`` / ``run_phase2`` for CLI orchestrator runs. The
+    LangGraph Studio runtime supplies its own persistence and rejects graphs
+    with a custom checkpointer, so the Studio entrypoints don't use this.
     """
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
-    return SqliteSaver(conn)
+    async with AsyncSqliteSaver.from_conn_string(str(db_path)) as saver:
+        yield saver

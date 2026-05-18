@@ -17,7 +17,9 @@ def _handle() -> PromptHandle:
 async def test_checker_emits_passing_verdict() -> None:
     canned = Verdict(checker="consistency", passed=True)
     llm = FakeChatModel(structured={Verdict: canned})
-    checker = Checker(name="consistency", prompt=_handle(), llm=llm)
+    checker = Checker(
+        name="consistency", prompt=_handle(), llm=llm, provider="anthropic", model_id="fake"
+    )
     out = await checker.invoke(AgentContext(inputs={"artifact": "x"}))
     assert isinstance(out, Verdict)
     assert out.passed is True
@@ -27,7 +29,9 @@ async def test_checker_emits_passing_verdict() -> None:
 async def test_checker_overrides_checker_name_to_match_instance() -> None:
     canned = Verdict(checker="WRONG", passed=False)
     llm = FakeChatModel(structured={Verdict: canned})
-    checker = Checker(name="background", prompt=_handle(), llm=llm)
+    checker = Checker(
+        name="background", prompt=_handle(), llm=llm, provider="anthropic", model_id="fake"
+    )
     out = await checker.invoke(AgentContext(inputs={"artifact": "x"}))
     assert isinstance(out, Verdict)
     assert out.checker == "background"
