@@ -26,6 +26,34 @@ Each run produces a benchmark-ready dataset with separate artifacts for causes, 
 
 Together, these datasets support both online-style evaluation, where only `incoming_requests` are shown to a system under test, and offline analysis, where `problems`, `resolutions`, `lineage`, and traces explain why each example exists and how it was generated.
 
+## What the generator consumes
+
+Each run is driven by two kinds of inputs: **seed files** that describe the fictional domain, and **config files** that pin down how much data to make, in what proportions, and with which models. Together they fully determine a run — same seeds + same config + same `run_seed` reproduce the same allocation plan.
+
+### Seed files (`seeds/`)
+
+Markdown documents that ground generation in a concrete business. They are referenced from the generator prompts and are the only source of domain-specific content; swap them out to retarget the generator at a different company or industry without touching code.
+
+- **`seeds/company_seed.md`** — the company profile. Identity, sector, products (e.g. the flagship CT-500 chiller), representative components, customer segments, and service organisation. This is what makes generated problems and resolutions sound like they belong to a real manufacturer rather than a generic SaaS.
+- **`seeds/scenarios_seed.md`** — the customer-service case catalogue. A structured list of business cases (documentation requests, L1/L2/L3 troubleshooting, field-service escalations) with tags, escalation tier, as-is process, sample-data hints, and systems touched. The generator uses these as the templates that Phase 1 problems and Phase 2 resolutions are built against.
+
+`csfd init` scaffolds both files; the shipped versions describe the fictional **CoolTherm Industrial Chillers** company used as the running example.
+
+### Config files (`config/`)
+
+YAML that controls the deterministic shape of the run — counts, proportions, retry budget, model choice, and validation toggles.
+
+- **`config/default.yaml`** — the base config, always loaded. Top-level sections:
+  - `pipeline` — `version`, `run_seed`, and the per-run budget (`max_tokens_per_run`, `max_usd_per_run`, `max_retries_per_artifact`).
+  - `agents` — the two LLM buckets (`generator` and `combined_checker`) with `provider`, `model`, `temperature`, `max_tokens`, and `timeout_s`. Every node in the graph routes to one of these buckets.
+  - `problem_database` — Phase 1 controls: `count` and `complexity_proportions` (simple / medium / complex), applied with largest-remainder rounding.
+  - `tickets` — Phase 2 controls: `total`, `type_proportions`, `tier_proportions`, `tone_proportions_per_type`, `turns_per_type`, and `assignment_strategy` (`complexity_weighted` or `uniform`).
+  - `validation` — whether the combined checker runs after each generation and how its verdict gates retries.
+- **`config/profiles/*.yaml`** — overlays applied on top of `default.yaml` via `--profile <name>`. Shipped overlays cover model routing (`claude-only`, `claude-cli`, `local-only`, `mixed`) and a small `dev` overlay that shrinks problem/ticket counts for fast iteration.
+- **`.env`** — credentials and endpoints (`ANTHROPIC_API_KEY`, `LOCAL_BASE_URL`, …) read at runtime. Not part of the deterministic snapshot.
+
+The resolved config (default + active profile) is persisted as `runs.config_snapshot_json`, so any exported dataset can be traced back to the exact inputs that produced it.
+
 ## Goals
 
 `csfd` focuses on three goals:
