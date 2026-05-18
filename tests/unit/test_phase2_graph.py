@@ -18,6 +18,7 @@ from langgraph.graph.state import CompiledStateGraph
 from csfd.agents.base import Verdict
 from csfd.agents.factory import AgentFactory
 from csfd.graph.phase2_graph import (
+    _route_after_build_allocation_plan,
     _route_after_commit_resolution,
     _route_after_generate_resolution,
     _route_after_validate_resolution,
@@ -185,6 +186,16 @@ def test_route_after_commit_done() -> None:
         slot_index=2,
     )
     assert _route_after_commit_resolution(state) == "done"
+
+
+def test_route_after_build_allocation_plan_done_when_empty() -> None:
+    state = _make_state(plan_slots=[])
+    assert _route_after_build_allocation_plan(state) == "done"
+
+
+def test_route_after_build_allocation_plan_generate_when_nonempty() -> None:
+    state = _make_state(plan_slots=[_plan_slot(0)])
+    assert _route_after_build_allocation_plan(state) == "generate"
 
 
 # --------------------------------------------------------------------------- #

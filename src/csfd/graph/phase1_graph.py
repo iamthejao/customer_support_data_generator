@@ -51,7 +51,8 @@ from csfd.graph.pipeline_graph import PipelineState
 from csfd.pipeline import ProblemBrainstormOutput, _assign_target_complexities
 from csfd.settings import AppSettings
 from csfd.storage.db import Database
-from csfd.storage.v2_repository import ProblemV2Record, ProblemV2Repo
+from csfd.storage.db_async import AsyncDatabase
+from csfd.storage.repository import ProblemRecord, ProblemRepo
 
 # --------------------------------------------------------------------------- #
 # Nodes
@@ -79,6 +80,7 @@ async def generate_problem_node(
     *,
     factory: AgentFactory,
     db: Database,
+    adb: AsyncDatabase,
 ) -> dict[str, Any]:
     """Invoke the problem-brainstorm generator for the current slot."""
     i = state.problem_index
@@ -103,6 +105,7 @@ async def generate_problem_node(
     traced_gen = TracingAdapter(
         inner=generator,
         db=db,
+        adb=adb,
         run_id=state.run_id,
         node_name="problem_brainstorm",
         artifact_type="problem",
@@ -130,6 +133,7 @@ async def validate_problem_node(
     *,
     factory: AgentFactory,
     db: Database,
+    adb: AsyncDatabase,
 ) -> dict[str, Any]:
     """Run the combined checker against the current problem draft."""
     i = state.problem_index
@@ -150,6 +154,7 @@ async def validate_problem_node(
     traced_check = TracingAdapter(
         inner=checker,
         db=db,
+        adb=adb,
         run_id=state.run_id,
         node_name="combined_problem_check",
         artifact_type="problem",
@@ -171,15 +176,16 @@ async def commit_problem_node(
     state: PipelineState,
     *,
     db: Database,
+    adb: AsyncDatabase,
 ) -> dict[str, Any]:
-    """Persist the current draft as a ``ProblemV2Record`` and advance the index."""
+    """Persist the current draft as a ``ProblemRecord`` and advance the index."""
     i = state.problem_index
     problem_id = f"{state.run_id}:p:{i:04d}"
     assert state.current_problem_draft is not None
     # Force-fit the LLM's complexity to the target — proportions are authoritative.
     target_complexity = state.target_complexities[i]
 
-    record = ProblemV2Record(
+    record = ProblemRecord(
         id=problem_id,
         run_id=state.run_id,
         title=state.current_problem_draft.title,
@@ -191,7 +197,7 @@ async def commit_problem_node(
         quality_flag=state.last_quality_flag,
         created_at=datetime.now(UTC),
     )
-    ProblemV2Repo(db).create(record)
+    await ProblemRepo(db).acreate(adb, record)
 
     # ``problems_committed`` has no reducer in PipelineState — return the full
     # list to perform a full-list replacement.
@@ -258,20 +264,22 @@ def build_phase1_subgraph(
     factory: AgentFactory,
     db: Database,
     settings: AppSettings,
+    adb: AsyncDatabase | None = None,
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
     """Compile the Phase 1 (Problem Database) subgraph.
 
     Returns a graph that, given a ``PipelineState`` with ``company``,
     ``scenarios``, and run-scoped fields populated, generates
     ``settings.problem_database.count`` problems sequentially and persists
-    them via :class:`ProblemV2Repo`. No checkpointer is attached here — the
+    them via :class:`ProblemRepo`. No checkpointer is attached here — the
     parent graph owns checkpoint persistence.
     """
+    adb = adb if adb is not None else AsyncDatabase(db.path)
     g: StateGraph[PipelineState, Any, PipelineState, PipelineState] = StateGraph(PipelineState)
     g.add_node("init_phase1", partial(init_phase1_node, settings=settings))
-    g.add_node("generate_problem", partial(generate_problem_node, factory=factory, db=db))
-    g.add_node("validate_problem", partial(validate_problem_node, factory=factory, db=db))
-    g.add_node("commit_problem", partial(commit_problem_node, db=db))
+    g.add_node("generate_problem", partial(generate_problem_node, factory=factory, db=db, adb=adb))
+    g.add_node("validate_problem", partial(validate_problem_node, factory=factory, db=db, adb=adb))
+    g.add_node("commit_problem", partial(commit_problem_node, db=db, adb=adb))
     g.add_node("_bump_retry", _bump_retry_node)
     g.add_node("_mark_exhausted", _mark_exhausted_node)
     g.add_node("_mark_validation_skipped", _mark_validation_skipped_node)

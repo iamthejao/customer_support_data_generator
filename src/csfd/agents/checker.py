@@ -43,6 +43,14 @@ class Checker(AgentRole):
     def prompt(self) -> PromptHandle:
         return self._inner.prompt
 
+    @property
+    def last_tokens_in(self) -> int | None:
+        return self._inner.last_tokens_in
+
+    @property
+    def last_tokens_out(self) -> int | None:
+        return self._inner.last_tokens_out
+
     async def invoke(self, ctx: AgentContext) -> Verdict:
         out: BaseModel = await self._inner.invoke(ctx)
         if not isinstance(out, Verdict):

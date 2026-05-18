@@ -36,15 +36,15 @@ from csfd.models.registry import build_llm
 from csfd.pipeline import (
     ProblemBrainstormOutput,
     ResolutionOutput,
-    _compute_run_stats,
+    _acompute_run_stats,
 )
 from csfd.prompts.registry import PromptRegistry
 from csfd.seeds.company import CompanyProfile
 from csfd.seeds.scenarios import ScenarioCatalogue
 from csfd.settings import AppSettings, load_settings
 from csfd.storage.db import Database
-from csfd.storage.repository import RunRecord, RunRepo
-from csfd.storage.v2_repository import ProblemV2Record
+from csfd.storage.db_async import AsyncDatabase
+from csfd.storage.repository import ProblemRecord, RunRecord, RunRepo
 from csfd.ticket_types.definitions import TicketType
 from csfd.utils.git import current_git_sha
 
@@ -87,7 +87,7 @@ class PipelineState(BaseModel):
     # --- Phase 1 progress ---
     target_complexities: list[str] = Field(default_factory=list)
     problem_index: int = 0
-    problems_committed: list[ProblemV2Record] = Field(default_factory=list)
+    problems_committed: list[ProblemRecord] = Field(default_factory=list)
 
     # --- Phase 2 progress ---
     plan_slots: list[_PlanSlot] = Field(default_factory=list)
@@ -113,13 +113,15 @@ async def init_run_node(
     state: PipelineState,
     *,
     db: Database,
+    adb: AsyncDatabase,
     settings: AppSettings,
 ) -> dict[str, Any]:
     """Create the ``runs`` row at start of pipeline. Stamps ``git_sha``."""
     import json
 
     started_at = datetime.now(UTC)
-    RunRepo(db).create(
+    await RunRepo(db).acreate(
+        adb,
         RunRecord(
             id=state.run_id,
             phase="full",
@@ -140,7 +142,7 @@ async def init_run_node(
             ),
             stats_json=None,
             error_summary=None,
-        )
+        ),
     )
     return {"started_at": started_at}
 
@@ -149,11 +151,14 @@ async def finalize_run_node(
     state: PipelineState,
     *,
     db: Database,
+    adb: AsyncDatabase,
 ) -> dict[str, Any]:
     """Compute end-of-run stats and mark the run completed."""
     assert state.started_at is not None, "init_run must set started_at"
-    stats = _compute_run_stats(db=db, run_id=state.run_id, started_at=state.started_at)
-    RunRepo(db).update_status(state.run_id, status="completed", completed=True, stats=stats)
+    stats = await _acompute_run_stats(adb=adb, run_id=state.run_id, started_at=state.started_at)
+    await RunRepo(db).aupdate_status(
+        adb, state.run_id, status="completed", completed=True, stats=stats
+    )
     return {}
 
 
@@ -168,20 +173,29 @@ def build_pipeline_graph(
     db: Database,
     settings: AppSettings,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
+    adb: AsyncDatabase | None = None,
 ) -> _CompiledGraph:
     """Build and compile the parent pipeline graph.
 
     The two phase subgraphs are imported lazily so this module remains
     importable while ``phase1_graph`` / ``phase2_graph`` are being authored.
+    An ``AsyncDatabase`` is constructed from ``db.path`` if not supplied; it
+    is used by every graph node body for sqlite writes (the sync ``db`` is
+    still used for read paths that don't need to be async-safe).
     """
     from csfd.graph.phase1_graph import build_phase1_subgraph
     from csfd.graph.phase2_graph import build_phase2_subgraph
 
+    adb_local = adb if adb is not None else AsyncDatabase(db.path)
     g: StateGraph[PipelineState, Any, PipelineState, PipelineState] = StateGraph(PipelineState)
-    g.add_node("init_run", partial(init_run_node, db=db, settings=settings))
-    g.add_node("phase1", build_phase1_subgraph(factory=factory, db=db, settings=settings))
-    g.add_node("phase2", build_phase2_subgraph(factory=factory, db=db, settings=settings))
-    g.add_node("finalize_run", partial(finalize_run_node, db=db))
+    g.add_node("init_run", partial(init_run_node, db=db, adb=adb_local, settings=settings))
+    g.add_node(
+        "phase1", build_phase1_subgraph(factory=factory, db=db, adb=adb_local, settings=settings)
+    )
+    g.add_node(
+        "phase2", build_phase2_subgraph(factory=factory, db=db, adb=adb_local, settings=settings)
+    )
+    g.add_node("finalize_run", partial(finalize_run_node, db=db, adb=adb_local))
 
     g.add_edge(START, "init_run")
     g.add_edge("init_run", "phase1")

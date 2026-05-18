@@ -328,6 +328,7 @@ name = "csfd"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiosqlite" },
     { name = "jinja2" },
     { name = "langchain-anthropic" },
     { name = "langchain-core" },
@@ -359,6 +360,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiosqlite", specifier = "~=0.20" },
     { name = "jinja2", specifier = "~=3.1" },
     { name = "langchain-anthropic", specifier = "~=1.4" },
     { name = "langchain-core", specifier = "~=1.4" },

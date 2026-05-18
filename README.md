@@ -155,12 +155,12 @@ Two invariants hold across the whole walk: every LLM call produces exactly one `
 ```bash
 uv sync
 csfd db-migrate                       # create runs.sqlite (prerequisite)
-langgraph dev --allow-blocking        # start Studio
+langgraph dev                         # start Studio
 ```
 
 Studio opens at `http://localhost:8123` and shows the parent graph with both phase subgraphs nested. You get per-node input/output inspection, time-travel debugging, and manual state edits.
 
-**Why `--allow-blocking`?** Studio runs requests under [`blockbuster`](https://github.com/cbornet/blockbuster), which traps sync I/O inside the asyncio loop. The persistence layer uses sync `sqlite3`, so node execution would otherwise raise `BlockingError`. The graph *loading* path is already async-safe — `src/csfd/graph/studio.py` pre-builds the compiled graph at module import time. (Future work: swap to `aiosqlite` and drop the flag.)
+The persistence layer inside graph nodes is `aiosqlite`-backed (see `src/csfd/storage/db_async.py`), so [`blockbuster`](https://github.com/cbornet/blockbuster)'s sync-I/O trap is respected without any `--allow-blocking` flag. The sync `Database` is still used for read paths outside the graph (CLI inspect/export, tests, migrations).
 
 ## Reproducibility
 
@@ -170,7 +170,7 @@ Every run stamps:
 - `git_sha` — captured at run start via `git rev-parse HEAD` (NULL outside a git repo)
 - `config_snapshot_json` — the resolved `problem_database` + `tickets` + `validation` sections
 - `stats_json` — end-of-run counts (problems, requests, resolutions, traces) plus type/tier/tone/complexity breakdowns and quality-flag distribution
-- `prompt_id` — sha256-prefix hash of the **prompt template source** (the Jinja file contents, not the per-call rendered prompt — so the id is a stable handle that changes only when a template is edited), recorded on every row in `agent_traces.prompt_id`. Each LLM call also records `model_provider`, `model_id`, `attempt`, `latency_ms`, and (for checker calls) `verdict` and `verdict_issues_json`.
+- `prompt_id` — sha256-prefix hash of the **prompt template source** (the Jinja file contents, not the per-call rendered prompt — so the id is a stable handle that changes only when a template is edited), recorded on every row in `agent_traces.prompt_id`. Each LLM call also records `model_provider`, `model_id`, `attempt`, `latency_ms`, and (for checker calls) `verdict` and `verdict_issues_json`. Token usage (`tokens_in`, `tokens_out`) is populated from LangChain's `usage_metadata` for any provider that emits it (Anthropic, OpenAI-compatible); `FakeChatModel` and the Claude CLI wrapper leave them NULL.
 
 Determinism guarantee: given identical config and seed, two runs against fresh databases produce slot-by-slot identical lineage rows `(slot_index, problem_index_within_run, ticket_type, customer_tier, customer_tone, customer_name)`. Run-scoped UUIDs (`run_id` and the prefix of `problem_id` / `ticket_uid`) of course differ — the deterministic part is the per-run index suffix. The only source of additional variation are the LLM responses themselves.
 
@@ -236,7 +236,7 @@ uv run mypy src tests # strict
 uv run ruff check src tests
 ```
 
-Live LLM tests are gated behind `-m live_llm`.
+Live LLM tests are gated behind `-m live_llm`. The retry sub-loop (generator → checker fail → re-generate → checker pass → commit) is covered end-to-end by `tests/integration/test_pipeline_retry.py`, which asserts that the retry counter advances, each checker trace links to its same-attempt generator via `parent_trace_id`, and the accepted record has no `warning:retries_exhausted` quality flag.
 
 ## Planned improvements
 
@@ -246,9 +246,7 @@ Concrete next steps that would meaningfully raise the quality, throughput, or re
 
 2. **De-duplicate problems by embedding similarity at commit time.** `commit_problem` currently accepts any candidate that passes the checker, so two near-identical root causes can both enter the Problem Database — which silently inflates "diversity" metrics and biases Phase 2 allocations. Embedding each accepted candidate (e.g. a small local model) and rejecting commits whose cosine similarity to an existing problem exceeds a configurable threshold would enforce semantic spread at the database level. On rejection, the Phase 1 retry sub-loop already handles re-generation cleanly; the only new state is an embeddings table keyed on `problem_id` for fast in-run lookup.
 
-3. **Swap sync `sqlite3` for `aiosqlite` in the persistence layer.** Today the commit nodes call sync `sqlite3` inside async graph execution, which is why LangGraph Studio currently requires `--allow-blocking` to bypass `blockbuster`'s sync-I/O trap. Migrating the checkpointer-adjacent write path to `aiosqlite` removes the workaround, restores Studio's blocking-call safety net (useful for catching future regressions), and lets node execution actually overlap I/O with LLM latency. The schema and SQL are unchanged — only the driver and the `commit_*` node bodies need to become `async`.
-
-4. **Add creativity / noise agents to diversify generation.** Right now every problem and every resolution is produced by a single generator prompt against the same seed material, which biases output toward the model's mode and produces tickets that feel stylistically homogeneous. A lightweight "noise" agent inserted before the generator — varying customer voice, urgency, partial information, typos, regional phrasing, or back-and-forth ambiguity per slot — would yield datasets that better stress-test routing, RAG retrieval, and agent handling of messy real-world inputs. Determinism is preserved by deriving the noise agent's choices from `(run_seed, slot_index)`.
+3. **Add creativity / noise agents to diversify generation.** Right now every problem and every resolution is produced by a single generator prompt against the same seed material, which biases output toward the model's mode and produces tickets that feel stylistically homogeneous. A lightweight "noise" agent inserted before the generator — varying customer voice, urgency, partial information, typos, regional phrasing, or back-and-forth ambiguity per slot — would yield datasets that better stress-test routing, RAG retrieval, and agent handling of messy real-world inputs. Determinism is preserved by deriving the noise agent's choices from `(run_seed, slot_index)`.
 
 ## License
 

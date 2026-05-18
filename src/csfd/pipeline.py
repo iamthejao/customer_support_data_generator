@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 import structlog
@@ -33,6 +33,9 @@ from csfd.settings import AppSettings
 from csfd.storage.db import Database
 from csfd.ticket_types.definitions import ProblemComplexity
 from csfd.utils.rng import largest_remainder
+
+if TYPE_CHECKING:
+    from csfd.storage.db_async import AsyncDatabase
 
 _log = structlog.get_logger(__name__)
 
@@ -142,6 +145,52 @@ def _compute_run_stats(
             "problems": _group_count("problems", "quality_flag"),
             "incoming_requests": _group_count("incoming_requests", "quality_flag"),
             "resolutions": _group_count("resolutions", "quality_flag"),
+        },
+        "duration_s": round((datetime.now(UTC) - started_at).total_seconds(), 3),
+    }
+
+
+async def _acompute_run_stats(
+    *,
+    adb: AsyncDatabase,
+    run_id: str,
+    started_at: datetime,
+) -> dict[str, Any]:
+    """Async sibling of :func:`_compute_run_stats` used inside graph nodes."""
+
+    async def _group_count(table: str, group_col: str) -> dict[str, int]:
+        async with adb.connect() as conn:
+            cur = await conn.execute(
+                f"SELECT {group_col} AS k, COUNT(*) AS n FROM {table} "
+                f"WHERE run_id = ? GROUP BY {group_col} ORDER BY {group_col}",
+                (run_id,),
+            )
+            rows = await cur.fetchall()
+        return {(r["k"] or "ok"): int(r["n"]) for r in rows}
+
+    async def _count(table: str) -> int:
+        async with adb.connect() as conn:
+            cur = await conn.execute(
+                f"SELECT COUNT(*) AS n FROM {table} WHERE run_id = ?",
+                (run_id,),
+            )
+            row = await cur.fetchone()
+        assert row is not None
+        return int(row["n"])
+
+    return {
+        "problem_count": await _count("problems"),
+        "incoming_requests_count": await _count("incoming_requests"),
+        "resolutions_count": await _count("resolutions"),
+        "agent_traces_count": await _count("agent_traces"),
+        "complexity_counts": await _group_count("problems", "complexity"),
+        "type_counts": await _group_count("incoming_requests", "ticket_type"),
+        "tier_counts": await _group_count("incoming_requests", "customer_tier"),
+        "tone_counts": await _group_count("incoming_requests", "customer_tone"),
+        "quality_flags": {
+            "problems": await _group_count("problems", "quality_flag"),
+            "incoming_requests": await _group_count("incoming_requests", "quality_flag"),
+            "resolutions": await _group_count("resolutions", "quality_flag"),
         },
         "duration_s": round((datetime.now(UTC) - started_at).total_seconds(), 3),
     }
