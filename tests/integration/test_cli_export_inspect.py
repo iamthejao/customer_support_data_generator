@@ -12,8 +12,7 @@ from typer.testing import CliRunner
 from csfd.cli import app
 from csfd.storage.db import Database
 from csfd.storage.migrations.runner import apply_migrations
-from csfd.storage.repository import RunRecord, RunRepo
-from csfd.storage.v2_repository import ProblemV2Record, ProblemV2Repo
+from csfd.storage.repository import ProblemRecord, ProblemRepo, RunRecord, RunRepo
 
 runner = CliRunner()
 
@@ -38,8 +37,8 @@ def _seed_run(db_path: Path) -> str:
             error_summary=None,
         )
     )
-    ProblemV2Repo(db).create(
-        ProblemV2Record(
+    ProblemRepo(db).create(
+        ProblemRecord(
             id=f"{rid}:p:0000",
             run_id=rid,
             title="t",

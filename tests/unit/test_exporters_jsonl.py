@@ -6,8 +6,7 @@ from uuid import uuid4
 from csfd.storage.db import Database
 from csfd.storage.exporters import export_run_to_jsonl
 from csfd.storage.migrations.runner import apply_migrations
-from csfd.storage.repository import RunRecord, RunRepo
-from csfd.storage.v2_repository import ProblemV2Record, ProblemV2Repo
+from csfd.storage.repository import ProblemRecord, ProblemRepo, RunRecord, RunRepo
 
 
 def test_export_jsonl_writes_problems_file(tmp_path: Path) -> None:
@@ -31,10 +30,10 @@ def test_export_jsonl_writes_problems_file(tmp_path: Path) -> None:
             error_summary=None,
         )
     )
-    repo = ProblemV2Repo(db)
+    repo = ProblemRepo(db)
     for i in range(2):
         repo.create(
-            ProblemV2Record(
+            ProblemRecord(
                 id=f"{run_id}:p:{i:04d}",
                 run_id=run_id,
                 title=f"P{i}",

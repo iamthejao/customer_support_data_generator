@@ -7,8 +7,7 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 from csfd.storage.db import Database
 from csfd.storage.exporters import export_run_to_parquet
 from csfd.storage.migrations.runner import apply_migrations
-from csfd.storage.repository import RunRecord, RunRepo
-from csfd.storage.v2_repository import ProblemV2Record, ProblemV2Repo
+from csfd.storage.repository import ProblemRecord, ProblemRepo, RunRecord, RunRepo
 
 
 def test_export_parquet_round_trip(tmp_path: Path) -> None:
@@ -31,8 +30,8 @@ def test_export_parquet_round_trip(tmp_path: Path) -> None:
             error_summary=None,
         )
     )
-    ProblemV2Repo(db).create(
-        ProblemV2Record(
+    ProblemRepo(db).create(
+        ProblemRecord(
             id=f"{run_id}:p:0000",
             run_id=run_id,
             title="P1",

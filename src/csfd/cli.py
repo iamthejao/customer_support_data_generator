@@ -18,12 +18,12 @@ from csfd.settings import load_settings
 from csfd.storage.db import Database
 from csfd.storage.exporters import export_run_to_jsonl, export_run_to_parquet
 from csfd.storage.migrations.runner import apply_migrations
-from csfd.storage.repository import RunRepo
-from csfd.storage.v2_repository import (
+from csfd.storage.repository import (
     IncomingRequestRepo,
     LineageRepo,
-    ProblemV2Repo,
+    ProblemRepo,
     ResolutionRepo,
+    RunRepo,
 )
 
 app = typer.Typer(help="Customer-Service Fake Data — synthetic CS ticket generator.")
@@ -193,7 +193,7 @@ def inspect(
     db = Database(path=Path(sqlite_path))
     run = RunRepo(db).get(run_id)
     typer.echo(f"Run: {run.id} ({run.phase}, {run.status})")
-    pdb = ProblemV2Repo(db).list_for_run(run_id)
+    pdb = ProblemRepo(db).list_for_run(run_id)
     ir = IncomingRequestRepo(db).count_for_run(run_id)
     res = ResolutionRepo(db).count_for_run(run_id)
     lin = LineageRepo(db).count_for_run(run_id)

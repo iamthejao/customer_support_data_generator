@@ -51,7 +51,7 @@ from csfd.graph.pipeline_graph import PipelineState
 from csfd.pipeline import ProblemBrainstormOutput, _assign_target_complexities
 from csfd.settings import AppSettings
 from csfd.storage.db import Database
-from csfd.storage.v2_repository import ProblemV2Record, ProblemV2Repo
+from csfd.storage.repository import ProblemRecord, ProblemRepo
 
 # --------------------------------------------------------------------------- #
 # Nodes
@@ -172,14 +172,14 @@ async def commit_problem_node(
     *,
     db: Database,
 ) -> dict[str, Any]:
-    """Persist the current draft as a ``ProblemV2Record`` and advance the index."""
+    """Persist the current draft as a ``ProblemRecord`` and advance the index."""
     i = state.problem_index
     problem_id = f"{state.run_id}:p:{i:04d}"
     assert state.current_problem_draft is not None
     # Force-fit the LLM's complexity to the target — proportions are authoritative.
     target_complexity = state.target_complexities[i]
 
-    record = ProblemV2Record(
+    record = ProblemRecord(
         id=problem_id,
         run_id=state.run_id,
         title=state.current_problem_draft.title,
@@ -191,7 +191,7 @@ async def commit_problem_node(
         quality_flag=state.last_quality_flag,
         created_at=datetime.now(UTC),
     )
-    ProblemV2Repo(db).create(record)
+    ProblemRepo(db).create(record)
 
     # ``problems_committed`` has no reducer in PipelineState — return the full
     # list to perform a full-list replacement.
@@ -264,7 +264,7 @@ def build_phase1_subgraph(
     Returns a graph that, given a ``PipelineState`` with ``company``,
     ``scenarios``, and run-scoped fields populated, generates
     ``settings.problem_database.count`` problems sequentially and persists
-    them via :class:`ProblemV2Repo`. No checkpointer is attached here — the
+    them via :class:`ProblemRepo`. No checkpointer is attached here — the
     parent graph owns checkpoint persistence.
     """
     g: StateGraph[PipelineState, Any, PipelineState, PipelineState] = StateGraph(PipelineState)

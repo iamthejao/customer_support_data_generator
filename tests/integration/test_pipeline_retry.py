@@ -38,8 +38,7 @@ from csfd.settings import (
 )
 from csfd.storage.db import Database
 from csfd.storage.migrations.runner import apply_migrations
-from csfd.storage.repository import AgentTraceRepo
-from csfd.storage.v2_repository import ProblemV2Repo
+from csfd.storage.repository import AgentTraceRepo, ProblemRepo
 from csfd.ticket_types.definitions import ProblemComplexity
 
 
@@ -175,7 +174,7 @@ def test_phase1_retry_path_accepts_clean_on_second_attempt(
     assert fake.verdict_calls == 2
 
     # 2. Accepted problem is flagged clean (passed on attempt 2, not retries_exhausted).
-    pdb = ProblemV2Repo(db).list_for_run(run_id)
+    pdb = ProblemRepo(db).list_for_run(run_id)
     assert len(pdb) == 1
     assert pdb[0].quality_flag is None
 

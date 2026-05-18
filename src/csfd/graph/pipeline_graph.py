@@ -43,8 +43,7 @@ from csfd.seeds.company import CompanyProfile
 from csfd.seeds.scenarios import ScenarioCatalogue
 from csfd.settings import AppSettings, load_settings
 from csfd.storage.db import Database
-from csfd.storage.repository import RunRecord, RunRepo
-from csfd.storage.v2_repository import ProblemV2Record
+from csfd.storage.repository import ProblemRecord, RunRecord, RunRepo
 from csfd.ticket_types.definitions import TicketType
 from csfd.utils.git import current_git_sha
 
@@ -87,7 +86,7 @@ class PipelineState(BaseModel):
     # --- Phase 1 progress ---
     target_complexities: list[str] = Field(default_factory=list)
     problem_index: int = 0
-    problems_committed: list[ProblemV2Record] = Field(default_factory=list)
+    problems_committed: list[ProblemRecord] = Field(default_factory=list)
 
     # --- Phase 2 progress ---
     plan_slots: list[_PlanSlot] = Field(default_factory=list)

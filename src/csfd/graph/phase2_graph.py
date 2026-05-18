@@ -53,7 +53,7 @@ from csfd.graph.pipeline_graph import PipelineState, _PlanSlot
 from csfd.pipeline import ResolutionOutput
 from csfd.settings import AppSettings
 from csfd.storage.db import Database
-from csfd.storage.v2_repository import (
+from csfd.storage.repository import (
     IncomingRequestRecord,
     IncomingRequestRepo,
     LineageRecord,

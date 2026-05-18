@@ -40,10 +40,10 @@ from csfd.settings import (
 )
 from csfd.storage.db import Database
 from csfd.storage.migrations.runner import apply_migrations
-from csfd.storage.v2_repository import (
+from csfd.storage.repository import (
     IncomingRequestRepo,
     LineageRepo,
-    ProblemV2Repo,
+    ProblemRepo,
     ResolutionRepo,
 )
 from csfd.ticket_types.definitions import ProblemComplexity
@@ -192,7 +192,7 @@ def test_pipeline_produces_exact_proportions(
     )
 
     # Problem Database has the right number of rows.
-    pdb = ProblemV2Repo(db).list_for_run(run_id)
+    pdb = ProblemRepo(db).list_for_run(run_id)
     assert len(pdb) == 4
     # Complexity proportions: 0.5/0.25/0.25 over 4 -> 2/1/1.
     counts: dict[str, int] = {}
