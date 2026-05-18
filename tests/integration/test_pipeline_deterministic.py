@@ -271,24 +271,28 @@ def test_pipeline_is_deterministic_across_runs(
     assert slots_a == slots_b
     # Sanity: the byte-identical invariant must apply to every slot, not just the set.
     assert len(slots_a) == 10
+
     # customer_name embeds slot_index + tier — also catches sequence drift.
+    def _strip_run(uid: str) -> str:
+        # request_uid format: "<run_id>:<NNNNNN>:req". Strip the run_id prefix
+        # so byte-identical comparison across runs is meaningful.
+        return uid.split(":", 1)[1]
+
     names_a = [
         r["customer_name"]
         for r in sorted(
             IncomingRequestRepo(db_a).list_for_run(run_a),
-            key=lambda r: r["request_uid"],
+            key=lambda r: _strip_run(r["request_uid"]),
         )
     ]
     names_b = [
         r["customer_name"]
         for r in sorted(
             IncomingRequestRepo(db_b).list_for_run(run_b),
-            key=lambda r: r["request_uid"].split(":", 1)[1],
+            key=lambda r: _strip_run(r["request_uid"]),
         )
     ]
-    # Strip the run_id prefix from db_a's request_uid for comparison.
-    names_a_stripped = [n for n in names_a]
-    assert names_a_stripped == names_b
+    assert names_a == names_b
 
 
 def test_run_record_captures_provenance(
