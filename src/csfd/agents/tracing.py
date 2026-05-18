@@ -186,9 +186,9 @@ class TracingAdapter(AgentRole):
                 verdict_issues=verdict_issues,
                 model_provider=inner_any.provider,
                 model_id=inner_any.model_id,
-                tokens_in=None,
-                tokens_out=None,
-                cost_usd=None,
+                tokens_in=getattr(self._inner, "last_tokens_in", None),
+                tokens_out=getattr(self._inner, "last_tokens_out", None),
+                cost_usd=None,  # tokens flow now; cost requires a price table — out of scope.
                 latency_ms=latency_ms,
                 parent_trace_id=parent_trace_id,
                 status=status,

@@ -34,8 +34,12 @@ class Generator(AgentRole):
         self.provider = provider
         self.model_id = model_id
         self.last_rendered_prompt: str | None = None
+        self.last_tokens_in: int | None = None
+        self.last_tokens_out: int | None = None
 
     async def invoke(self, ctx: AgentContext) -> BaseModel:
+        from langchain_core.callbacks import UsageMetadataCallbackHandler
+
         rendered = self.prompt.template.render(
             inputs=ctx.inputs,
             prior_committed=ctx.prior_committed,
@@ -44,6 +48,7 @@ class Generator(AgentRole):
         )
         self.last_rendered_prompt = rendered
         runnable = self.llm.with_structured_output(self.output_schema)
+        usage_cb = UsageMetadataCallbackHandler()
         _log.info(
             "agent.invoke.start",
             agent=self.name,
@@ -53,7 +58,7 @@ class Generator(AgentRole):
         )
         t0 = time.perf_counter()
         try:
-            result = await runnable.ainvoke(rendered)
+            result = await runnable.ainvoke(rendered, config={"callbacks": [usage_cb]})
         except Exception as e:
             _log.error(
                 "agent.invoke.error",
@@ -62,7 +67,16 @@ class Generator(AgentRole):
                 duration_s=round(time.perf_counter() - t0, 2),
                 error=repr(e),
             )
+            self.last_tokens_in = None
+            self.last_tokens_out = None
             raise
+        # Sum tokens across any model keys the callback observed (single-key
+        # in practice). Providers that do not emit usage_metadata (FakeChatModel,
+        # the local claude CLI wrapper) leave the dict empty → fields stay None.
+        tin = sum(v.get("input_tokens", 0) for v in usage_cb.usage_metadata.values()) or None
+        tout = sum(v.get("output_tokens", 0) for v in usage_cb.usage_metadata.values()) or None
+        self.last_tokens_in = tin
+        self.last_tokens_out = tout
         duration_s = round(time.perf_counter() - t0, 2)
         if not isinstance(result, BaseModel):
             _log.error(
