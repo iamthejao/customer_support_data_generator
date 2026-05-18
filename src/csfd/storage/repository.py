@@ -24,9 +24,12 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from csfd.storage.db import Database
+
+if TYPE_CHECKING:
+    from csfd.storage.db_async import AsyncDatabase
 
 
 @dataclass(slots=True)
@@ -108,6 +111,59 @@ class RunRepo:
                 ),
             )
 
+    async def acreate(self, adb: AsyncDatabase, run: RunRecord) -> None:
+        async with adb.connect() as conn:
+            await conn.execute(
+                """
+                INSERT OR IGNORE INTO runs
+                  (id, phase, parent_run_id, status, started_at, completed_at,
+                   run_seed, pipeline_version, git_sha, config_snapshot_json,
+                   stats_json, error_summary)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run.id,
+                    run.phase,
+                    run.parent_run_id,
+                    run.status,
+                    run.started_at.isoformat(),
+                    run.completed_at.isoformat() if run.completed_at else None,
+                    run.run_seed,
+                    run.pipeline_version,
+                    run.git_sha,
+                    run.config_snapshot_json,
+                    run.stats_json,
+                    run.error_summary,
+                ),
+            )
+
+    async def aupdate_status(
+        self,
+        adb: AsyncDatabase,
+        run_id: str,
+        *,
+        status: str,
+        stats: dict[str, Any] | None = None,
+        error_summary: str | None = None,
+        completed: bool = True,
+    ) -> None:
+        async with adb.connect() as conn:
+            await conn.execute(
+                """
+                UPDATE runs
+                SET status = ?, completed_at = ?, stats_json = COALESCE(?, stats_json),
+                    error_summary = COALESCE(?, error_summary)
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    datetime.now(timezone.utc).isoformat() if completed else None,  # noqa: UP017
+                    json.dumps(stats) if stats is not None else None,
+                    error_summary,
+                    run_id,
+                ),
+            )
+
 
 def _row_to_run(row: sqlite3.Row) -> RunRecord:
     return RunRecord(
@@ -161,6 +217,47 @@ class AgentTraceRepo:
     def create(self, t: AgentTraceRecord) -> None:
         with self.db.connect() as conn:
             conn.execute(
+                """
+                INSERT OR IGNORE INTO agent_traces
+                  (id, run_id, thread_id, node_name, agent_role,
+                   artifact_type, artifact_id, attempt, prompt_id,
+                   input_json, output_json, verdict, verdict_issues_json,
+                   model_provider, model_id, tokens_in, tokens_out,
+                   cost_usd_estimated, latency_ms, parent_trace_id,
+                   status, error_class, error_message, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    t.id,
+                    t.run_id,
+                    t.thread_id,
+                    t.node_name,
+                    t.agent_role,
+                    t.artifact_type,
+                    t.artifact_id,
+                    t.attempt,
+                    t.prompt_id,
+                    t.input_json,
+                    t.output_json,
+                    t.verdict,
+                    t.verdict_issues_json,
+                    t.model_provider,
+                    t.model_id,
+                    t.tokens_in,
+                    t.tokens_out,
+                    t.cost_usd_estimated,
+                    t.latency_ms,
+                    t.parent_trace_id,
+                    t.status,
+                    t.error_class,
+                    t.error_message,
+                    t.created_at.isoformat(),
+                ),
+            )
+
+    async def acreate(self, adb: AsyncDatabase, t: AgentTraceRecord) -> None:
+        async with adb.connect() as conn:
+            await conn.execute(
                 """
                 INSERT OR IGNORE INTO agent_traces
                   (id, run_id, thread_id, node_name, agent_role,
@@ -285,6 +382,29 @@ class ProblemRepo:
                 ),
             )
 
+    async def acreate(self, adb: AsyncDatabase, p: ProblemRecord) -> None:
+        async with adb.connect() as conn:
+            await conn.execute(
+                """
+                INSERT OR IGNORE INTO problems
+                  (id, run_id, title, summary, background, category,
+                   complexity, resolution_hints_json, quality_flag, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    p.id,
+                    p.run_id,
+                    p.title,
+                    p.summary,
+                    p.background,
+                    p.category,
+                    p.complexity,
+                    json.dumps(p.resolution_hints, ensure_ascii=False),
+                    p.quality_flag,
+                    p.created_at.isoformat(),
+                ),
+            )
+
     def list_for_run(self, run_id: str) -> list[ProblemRecord]:
         with self.db.connect() as conn:
             rows = conn.execute(
@@ -369,6 +489,42 @@ class IncomingRequestRepo:
             ).fetchone()
             return int(row["id"])
 
+    async def acreate(self, adb: AsyncDatabase, r: IncomingRequestRecord) -> int:
+        """Async sibling of :meth:`create`. Returns the inserted-or-existing row id."""
+        async with adb.connect() as conn:
+            cur = await conn.execute(
+                """
+                INSERT OR IGNORE INTO incoming_requests
+                  (request_uid, run_id, problem_id, ticket_type, customer_name,
+                   customer_tier, customer_tone, channel, subject, body,
+                   quality_flag, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    r.request_uid,
+                    r.run_id,
+                    r.problem_id,
+                    r.ticket_type,
+                    r.customer_name,
+                    r.customer_tier,
+                    r.customer_tone,
+                    r.channel,
+                    r.subject,
+                    r.body,
+                    r.quality_flag,
+                    r.created_at.isoformat(),
+                ),
+            )
+            if cur.lastrowid:
+                return int(cur.lastrowid)
+            cur2 = await conn.execute(
+                "SELECT id FROM incoming_requests WHERE request_uid = ?",
+                (r.request_uid,),
+            )
+            row = await cur2.fetchone()
+            assert row is not None
+            return int(row["id"])
+
     def count_for_run(self, run_id: str) -> int:
         with self.db.connect() as conn:
             row = conn.execute(
@@ -438,6 +594,40 @@ class ResolutionRepo:
                 "SELECT id FROM resolutions WHERE resolution_uid = ?",
                 (r.resolution_uid,),
             ).fetchone()
+            return int(row["id"])
+
+    async def acreate(self, adb: AsyncDatabase, r: ResolutionRecord) -> int:
+        """Async sibling of :meth:`create`. Returns the inserted-or-existing row id."""
+        async with adb.connect() as conn:
+            cur = await conn.execute(
+                """
+                INSERT OR IGNORE INTO resolutions
+                  (resolution_uid, run_id, incoming_request_id, problem_id,
+                   ticket_type, turns_json, turn_count, resolved,
+                   quality_flag, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    r.resolution_uid,
+                    r.run_id,
+                    r.incoming_request_id,
+                    r.problem_id,
+                    r.ticket_type,
+                    json.dumps(r.turns, ensure_ascii=False),
+                    r.turn_count,
+                    1 if r.resolved else 0,
+                    r.quality_flag,
+                    r.created_at.isoformat(),
+                ),
+            )
+            if cur.lastrowid:
+                return int(cur.lastrowid)
+            cur2 = await conn.execute(
+                "SELECT id FROM resolutions WHERE resolution_uid = ?",
+                (r.resolution_uid,),
+            )
+            row = await cur2.fetchone()
+            assert row is not None
             return int(row["id"])
 
     def count_for_run(self, run_id: str) -> int:
@@ -511,6 +701,55 @@ class LineageRepo:
         params.append(ticket_uid)
         with self.db.connect() as conn:
             conn.execute(
+                f"UPDATE lineage SET {', '.join(sets)} WHERE ticket_uid = ?",
+                tuple(params),
+            )
+
+    async def acreate(self, adb: AsyncDatabase, r: LineageRecord) -> None:
+        async with adb.connect() as conn:
+            await conn.execute(
+                """
+                INSERT OR IGNORE INTO lineage
+                  (ticket_uid, run_id, slot_index, problem_id, ticket_type,
+                   customer_tier, customer_tone, incoming_request_id,
+                   resolution_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    r.ticket_uid,
+                    r.run_id,
+                    r.slot_index,
+                    r.problem_id,
+                    r.ticket_type,
+                    r.customer_tier,
+                    r.customer_tone,
+                    r.incoming_request_id,
+                    r.resolution_id,
+                    r.created_at.isoformat(),
+                ),
+            )
+
+    async def aupdate_links(
+        self,
+        adb: AsyncDatabase,
+        ticket_uid: str,
+        *,
+        incoming_request_id: int | None = None,
+        resolution_id: int | None = None,
+    ) -> None:
+        sets: list[str] = []
+        params: list[Any] = []
+        if incoming_request_id is not None:
+            sets.append("incoming_request_id = ?")
+            params.append(incoming_request_id)
+        if resolution_id is not None:
+            sets.append("resolution_id = ?")
+            params.append(resolution_id)
+        if not sets:
+            return
+        params.append(ticket_uid)
+        async with adb.connect() as conn:
+            await conn.execute(
                 f"UPDATE lineage SET {', '.join(sets)} WHERE ticket_uid = ?",
                 tuple(params),
             )
