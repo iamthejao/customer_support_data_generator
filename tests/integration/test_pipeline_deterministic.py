@@ -330,6 +330,24 @@ def test_run_record_captures_provenance(
     assert all(t.model_provider == "anthropic" and t.model_id == "fake" for t in traces)
 
 
+def test_pipeline_handles_zero_tickets(
+    tmp_path: Path, company: CompanyProfile, scenarios: ScenarioCatalogue
+) -> None:
+    """tickets.total == 0 must not crash; phase 2 is a no-op."""
+    settings = _build_settings(tmp_path=tmp_path, total=0, problems=2)
+    db = Database(path=Path(settings.storage.sqlite_path))
+    apply_migrations(db)
+    factory = _build_fake_factory(tmp_path)
+    run_id = asyncio.run(
+        run_pipeline(
+            settings=settings, factory=factory, db=db, company=company, scenarios=scenarios
+        )
+    )
+    assert IncomingRequestRepo(db).count_for_run(run_id) == 0
+    assert ResolutionRepo(db).count_for_run(run_id) == 0
+    assert LineageRepo(db).count_for_run(run_id) == 0
+
+
 def test_lineage_links_every_ticket(
     tmp_path: Path, company: CompanyProfile, scenarios: ScenarioCatalogue
 ) -> None:

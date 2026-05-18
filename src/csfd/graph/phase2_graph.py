@@ -331,6 +331,11 @@ async def _mark_validation_skipped_node(state: PipelineState) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
+def _route_after_build_allocation_plan(state: PipelineState) -> Literal["generate", "done"]:
+    """Skip the per-slot loop entirely if no slots were planned (tickets.total == 0)."""
+    return "generate" if state.plan_slots else "done"
+
+
 def _route_after_generate_resolution(state: PipelineState) -> Literal["validate", "commit"]:
     return "validate" if state.validation_enabled else "commit"
 
@@ -388,7 +393,14 @@ def build_phase2_subgraph(
     g.add_node("_mark_validation_skipped", _mark_validation_skipped_node)
 
     g.add_edge(START, "build_allocation_plan")
-    g.add_edge("build_allocation_plan", "generate_resolution")
+    g.add_conditional_edges(
+        "build_allocation_plan",
+        _route_after_build_allocation_plan,
+        {
+            "generate": "generate_resolution",
+            "done": END,
+        },
+    )
     g.add_conditional_edges(
         "generate_resolution",
         _route_after_generate_resolution,
