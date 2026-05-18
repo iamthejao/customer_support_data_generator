@@ -209,7 +209,7 @@ def render_graphs(
     out: str = typer.Option("docs/diagrams", "--out"),
 ) -> None:
     """Regenerate docs/diagrams/*.mmd from the structural subgraphs."""
-    from scripts.render_graphs import render_all
+    from csfd.graph.rendering import render_all
 
     written = render_all(Path(out))
     for name, path in written.items():
