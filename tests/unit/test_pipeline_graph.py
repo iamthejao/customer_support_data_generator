@@ -43,6 +43,7 @@ from csfd.settings import (
     ValidationConfig,
 )
 from csfd.storage.db import Database
+from csfd.storage.db_async import AsyncDatabase
 from csfd.storage.migrations.runner import apply_migrations
 from csfd.storage.repository import RunRecord, RunRepo
 
@@ -166,7 +167,8 @@ def test_init_run_node_writes_run_record(tmp_path: Path) -> None:
     apply_migrations(db)
 
     state = _make_state(run_id="r1")
-    result = asyncio.run(init_run_node(state, db=db, settings=settings))
+    adb = AsyncDatabase(settings.storage.sqlite_path)
+    result = asyncio.run(init_run_node(state, db=db, adb=adb, settings=settings))
 
     # The node returns the started_at it just wrote so LangGraph can merge it.
     assert "started_at" in result
@@ -211,7 +213,8 @@ def test_finalize_run_node_writes_stats(tmp_path: Path) -> None:
     )
 
     state = _make_state(run_id="r1", started_at=started_at)
-    result = asyncio.run(finalize_run_node(state, db=db))
+    adb = AsyncDatabase(settings.storage.sqlite_path)
+    result = asyncio.run(finalize_run_node(state, db=db, adb=adb))
     assert result == {}
 
     run = RunRepo(db).get("r1")

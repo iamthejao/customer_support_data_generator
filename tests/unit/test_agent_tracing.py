@@ -11,6 +11,7 @@ from csfd.agents.base import AgentContext, AgentRole
 from csfd.agents.tracing import ParentLink, TracingAdapter, record_agent_trace
 from csfd.prompts.registry import PromptHandle
 from csfd.storage.db import Database
+from csfd.storage.db_async import AsyncDatabase
 from csfd.storage.migrations.runner import apply_migrations
 from csfd.storage.repository import AgentTraceRepo, RunRecord, RunRepo
 
@@ -117,6 +118,7 @@ async def test_tracing_adapter_records_token_counts(tmp_db_path: Path) -> None:
     adapter = TracingAdapter(
         inner=_StubInner(tokens_in=42, tokens_out=11),
         db=db,
+        adb=AsyncDatabase(tmp_db_path),
         run_id=run_id,
         node_name="problem_brainstorm",
         artifact_type="problem",
@@ -156,6 +158,7 @@ async def test_tracing_adapter_token_counts_default_none(tmp_db_path: Path) -> N
     adapter = TracingAdapter(
         inner=_StubInner(tokens_in=None, tokens_out=None),
         db=db,
+        adb=AsyncDatabase(tmp_db_path),
         run_id=run_id,
         node_name="problem_brainstorm",
         artifact_type="problem",

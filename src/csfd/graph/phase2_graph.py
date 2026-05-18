@@ -53,6 +53,7 @@ from csfd.graph.pipeline_graph import PipelineState, _PlanSlot
 from csfd.pipeline import ResolutionOutput
 from csfd.settings import AppSettings
 from csfd.storage.db import Database
+from csfd.storage.db_async import AsyncDatabase
 from csfd.storage.repository import (
     IncomingRequestRecord,
     IncomingRequestRepo,
@@ -72,6 +73,7 @@ async def build_allocation_plan_node(
     state: PipelineState,
     *,
     db: Database,
+    adb: AsyncDatabase,
     settings: AppSettings,
 ) -> dict[str, Any]:
     """Build the deterministic allocation plan and pre-record lineage rows."""
@@ -91,7 +93,8 @@ async def build_allocation_plan_node(
 
     lineage_repo = LineageRepo(db)
     for slot in plan.slots:
-        lineage_repo.create(
+        await lineage_repo.acreate(
+            adb,
             LineageRecord(
                 ticket_uid=f"{state.run_id}:{slot.index:06d}",
                 run_id=state.run_id,
@@ -103,7 +106,7 @@ async def build_allocation_plan_node(
                 incoming_request_id=None,
                 resolution_id=None,
                 created_at=datetime.now(UTC),
-            )
+            ),
         )
 
     pydantic_slots = [
@@ -124,6 +127,7 @@ async def generate_resolution_node(
     *,
     factory: AgentFactory,
     db: Database,
+    adb: AsyncDatabase,
     settings: AppSettings,
 ) -> dict[str, Any]:
     """Invoke the resolution generator for the current slot."""
@@ -164,6 +168,7 @@ async def generate_resolution_node(
     traced_gen = TracingAdapter(
         inner=generator,
         db=db,
+        adb=adb,
         run_id=state.run_id,
         node_name="resolution_generator",
         artifact_type="resolution",
@@ -191,6 +196,7 @@ async def validate_resolution_node(
     *,
     factory: AgentFactory,
     db: Database,
+    adb: AsyncDatabase,
     settings: AppSettings,
 ) -> dict[str, Any]:
     """Run the combined resolution checker against the current draft."""
@@ -232,6 +238,7 @@ async def validate_resolution_node(
     traced_check = TracingAdapter(
         inner=checker,
         db=db,
+        adb=adb,
         run_id=state.run_id,
         node_name="combined_resolution_check",
         artifact_type="resolution",
@@ -253,6 +260,7 @@ async def commit_resolution_node(
     state: PipelineState,
     *,
     db: Database,
+    adb: AsyncDatabase,
 ) -> dict[str, Any]:
     """Persist incoming request + resolution and backfill the lineage row."""
     slot = state.plan_slots[state.slot_index]
@@ -264,7 +272,8 @@ async def commit_resolution_node(
     problem = problem_by_id[slot.problem_id]
     customer_name = f"Customer-{slot.tier}-{slot.index:04d}"
 
-    ir_id = IncomingRequestRepo(db).create(
+    ir_id = await IncomingRequestRepo(db).acreate(
+        adb,
         IncomingRequestRecord(
             request_uid=f"{ticket_uid}:req",
             run_id=state.run_id,
@@ -278,9 +287,10 @@ async def commit_resolution_node(
             body=draft.body,
             quality_flag=state.last_quality_flag,
             created_at=datetime.now(UTC),
-        )
+        ),
     )
-    res_id = ResolutionRepo(db).create(
+    res_id = await ResolutionRepo(db).acreate(
+        adb,
         ResolutionRecord(
             resolution_uid=f"{ticket_uid}:res",
             run_id=state.run_id,
@@ -292,9 +302,11 @@ async def commit_resolution_node(
             resolved=draft.resolved,
             quality_flag=state.last_quality_flag,
             created_at=datetime.now(UTC),
-        )
+        ),
     )
-    LineageRepo(db).update_links(ticket_uid, incoming_request_id=ir_id, resolution_id=res_id)
+    await LineageRepo(db).aupdate_links(
+        adb, ticket_uid, incoming_request_id=ir_id, resolution_id=res_id
+    )
 
     return {
         "slot_index": state.slot_index + 1,
@@ -365,6 +377,7 @@ def build_phase2_subgraph(
     factory: AgentFactory,
     db: Database,
     settings: AppSettings,
+    adb: AsyncDatabase | None = None,
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
     """Compile the Phase 2 (resolution generation) subgraph.
 
@@ -374,20 +387,21 @@ def build_phase2_subgraph(
     backfilling pre-recorded lineage rows. No checkpointer is attached here —
     the parent graph owns checkpoint persistence.
     """
+    adb = adb if adb is not None else AsyncDatabase(db.path)
     g: StateGraph[PipelineState, Any, PipelineState, PipelineState] = StateGraph(PipelineState)
     g.add_node(
         "build_allocation_plan",
-        partial(build_allocation_plan_node, db=db, settings=settings),
+        partial(build_allocation_plan_node, db=db, adb=adb, settings=settings),
     )
     g.add_node(
         "generate_resolution",
-        partial(generate_resolution_node, factory=factory, db=db, settings=settings),
+        partial(generate_resolution_node, factory=factory, db=db, adb=adb, settings=settings),
     )
     g.add_node(
         "validate_resolution",
-        partial(validate_resolution_node, factory=factory, db=db, settings=settings),
+        partial(validate_resolution_node, factory=factory, db=db, adb=adb, settings=settings),
     )
-    g.add_node("commit_resolution", partial(commit_resolution_node, db=db))
+    g.add_node("commit_resolution", partial(commit_resolution_node, db=db, adb=adb))
     g.add_node("_bump_retry", _bump_retry_node)
     g.add_node("_mark_exhausted", _mark_exhausted_node)
     g.add_node("_mark_validation_skipped", _mark_validation_skipped_node)
