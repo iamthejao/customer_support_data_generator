@@ -1,30 +1,86 @@
-You are generating a complete customer-service ticket and its full multi-turn resolution in a single response.
+You are simulating one complete customer-service ticket end-to-end — the customer's opening request **and** the full multi-turn back-and-forth between customer and agent — for {{ inputs.company_name | default('the company') }}. Produce a single Resolution record.
 
-Inputs:
+Inputs (full context):
 {{ inputs | tojson(indent=2) }}
 
 Hard requirements:
-
 - The resolution must address the problem described in `inputs.problem`.
-- The ticket type is **{{ inputs.ticket_type }}** — match the persona and complexity accordingly:
-  - `docs_request`: customer asks for documentation; agent provides a pointer and a brief summary.
-  - `l1`: first-line support; quick, KB-style resolution.
-  - `l2`: escalated; methodical troubleshooting with multiple steps and clarifications.
-  - `l3`: domain specialist; novel/edge-case, deep investigation, hypothesis-driven.
-- The conversation must contain **exactly {{ inputs.target_turn_count }} turns**, alternating starting with the customer.
-- The customer's tier is **{{ inputs.customer_tier }}** and tone is **{{ inputs.customer_tone }}** — reflect this in their language consistently.
-- Customer name is `{{ inputs.customer_name }}`; agent name is `{{ inputs.agent_name }}`.
+- The conversation must contain **exactly {{ inputs.target_turn_count }} turns**, alternating starting with `customer`.
+- Customer turns are labelled with `{{ inputs.customer_name }}`; agent turns with `{{ inputs.agent_name }}`.
+
+Ticket-type persona (`{{ inputs.ticket_type }}`):
+{% if inputs.ticket_type == "docs_request" -%}
+- The customer is asking for a documentation pointer, not a diagnosis. Keep their first message short (2–4 sentences).
+- The agent's role is to provide a documentation pointer plus a 2–3 sentence summary; do not invent a multi-step troubleshooting flow.
+- Resolution typically takes 2 turns; longer only if the customer asks a clarifying follow-up.
+{%- elif inputs.ticket_type == "l1" -%}
+- This is a first-line support interaction. The agent uses KB-style answers, asks at most one diagnostic question, and resolves quickly.
+- The agent must not invent multi-step diagnostic procedures, escalate prematurely, or quote internal engineering tooling.
+- Vocabulary stays accessible: no part numbers the customer wouldn't recognise.
+{%- elif inputs.ticket_type == "l2" -%}
+- This is methodical troubleshooting. The agent walks through 2–3 hypotheses, asks targeted diagnostic questions, and confirms findings before proposing a fix.
+- The agent may reference internal procedures by name but should explain them.
+- Conversation has a clear investigative arc; do not jump to a fix in turn 2.
+{%- elif inputs.ticket_type == "l3" -%}
+- This is a domain-specialist interaction. The agent is hypothesis-driven, references engineering or field-service insight, and is comfortable with edge cases.
+- The agent may request logs, serial numbers, or remote-session access and may schedule field-service follow-up.
+- Resolution may end `resolved=false` with a documented next step (escalation, field dispatch, RMA).
+{%- else -%}
+- Behave consistently with the named ticket type "{{ inputs.ticket_type }}": match the depth and vocabulary implied by the label and do not silently switch to a different tier.
+{%- endif %}
+
+Customer tier (`{{ inputs.customer_tier }}`):
+{% if inputs.customer_tier == "standard" -%}
+- The customer has standard entitlements: no premium SLA language, no named account manager, no entitlement to immediate field dispatch.
+{%- elif inputs.customer_tier == "premium" -%}
+- The customer has premium entitlements: may reference an SLA window, a priority queue, or a named contact. They expect faster acknowledgement but should not act entitled or impolite.
+{%- elif inputs.customer_tier == "enterprise" -%}
+- The customer has enterprise entitlements: large fleet, named account team, contractual SLAs. They speak as a business stakeholder (downtime cost, impact on operations), not as an end user.
+{%- else -%}
+- Behave consistently with the named tier "{{ inputs.customer_tier }}": adapt entitlements language to the tier and do not silently switch to a different one.
+{%- endif %}
+
+Customer tone (`{{ inputs.customer_tone }}`):
+{% if inputs.customer_tone == "neutral" -%}
+- Voice is matter-of-fact: factual problem statement, no emotional markers, no apologies, no exclamation marks.
+{%- elif inputs.customer_tone == "polite" -%}
+- Voice is courteous: short pleasantries are fine ("thanks", "appreciate the help"), but the customer does not over-apologise.
+{%- elif inputs.customer_tone == "frustrated" -%}
+- Voice is visibly frustrated: brief expressions of impatience, references to "this keeps happening" or wasted time. No profanity, no personal attacks.
+{%- elif inputs.customer_tone == "urgent" -%}
+- Voice signals time pressure: explicit deadline or production impact, terse sentences, requests for ETAs. Urgency is consistent across all customer turns.
+{%- else -%}
+- match the named tone "{{ inputs.customer_tone }}" consistently across every customer turn; do not let the tone drift mid-conversation.
+{%- endif %}
+
+Anti-patterns (each maps to a checker rule id):
+- `turn_count` — produce exactly {{ inputs.target_turn_count }} turns; not one more, not one fewer.
+- `alternation` — alternate strictly `customer, agent, customer, …`; do not have two agent turns in a row.
+- `first_turn_parity` — `turns[0].content` must be the exact same string as `body`.
+- `persona_match` — do not let an `l1` agent invent `l3`-style diagnostics, and do not let an `l3` agent answer with a one-line KB snippet.
+- `tier_tone_consistency` — do not write a `premium` customer who apologises for the agent's time, or a `standard` customer who references an SLA.
+- `on_topic_resolution` — every turn must concern the supplied `problem`; do not invent unrelated side issues.
+- `naming` — customer turns must be labelled with `{{ inputs.customer_name }}`; agent turns with `{{ inputs.agent_name }}`. No other names.
+- `length_band` — `body` is 3–6 sentences; individual turn content is 1–6 sentences. Do not produce a one-word turn or a multi-paragraph monologue.
+- `agent_overreach` — the agent must not promise actions outside its tier (e.g. an `l1` agent dispatching field service, a `docs_request` agent running diagnostics).
+
+Worked example (single turn pair, illustrative only — do not copy verbatim):
+
+```
+customer ({{ inputs.customer_name }}): Our unit started power-cycling every twenty minutes this morning. Nothing was changed on our side. Can you help?
+agent ({{ inputs.agent_name }}): Thanks for flagging this. Can you confirm the ambient temperature near the unit and whether the fault light is solid or flashing?
+```
 
 {% if prior_verdicts -%}
-Prior attempt failed validation. Address each issue:
+Prior attempt failed validation. Address each issue, referencing the `rule_violated` id where given:
 {% for v in prior_verdicts %}{% for i in v.issues %}
 - [{{ i.severity }}] {{ i.location }} — {{ i.rule_violated }}: {{ i.explanation }}{% if i.suggested_fix %}
   Fix: {{ i.suggested_fix }}{% endif %}
 {% endfor %}{% endfor %}
 {%- endif %}
 
-Return a Resolution with:
-- `subject`: a short email-style subject line for the incoming request.
-- `body`: the customer's first message, expanded to a natural opening request (3-6 sentences). This is the standalone "incoming request" — write it as a complete message, not a summary.
-- `turns`: a list of exactly {{ inputs.target_turn_count }} turns. Each turn has `speaker` ("customer" or "agent"), `name`, and `content`. The first turn's content should be the same as `body`.
-- `resolved`: true if the conversation reaches a resolution; false if it ends unresolved/escalated.
+Output contract — return a Resolution with:
+- `subject`: a short email-style subject line for the incoming request (≤80 chars).
+- `body`: the customer's first message, expanded to a natural opening request (3–6 sentences). This is the standalone "incoming request" — write it as a complete message, not a summary.
+- `turns`: a list of exactly {{ inputs.target_turn_count }} turns. Each turn has `speaker` ("customer" or "agent"), `name`, and `content`. `turns[0].content` must equal `body`.
+- `resolved`: true if the conversation reaches a resolution; false if it ends unresolved or escalated.

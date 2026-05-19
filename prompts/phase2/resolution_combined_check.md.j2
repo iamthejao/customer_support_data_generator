@@ -1,18 +1,20 @@
-You are validating a candidate customer-service Resolution. Produce a single Verdict.
+You are validating a candidate customer-service Resolution. Produce a single Verdict. Use the rule ids listed below verbatim in `rule_violated` so the generator's retry block can address them precisely.
 
 Candidate (and surrounding context):
 {{ inputs | tojson(indent=2) }}
 
 Validate the following rules in one pass:
 
-1. **Turn count** — `len(turns)` must equal `inputs.target_turn_count`.
-2. **Alternation** — turns must alternate between `customer` and `agent`, starting with `customer`.
-3. **First-turn parity** — `turns[0].content` must equal `body` (the standalone incoming request).
-4. **Persona match** — agent's behaviour and depth must match the requested `ticket_type` (docs/l1/l2/l3).
-5. **Tier/tone consistency** — customer's language reflects the specified `customer_tier` and `customer_tone` across all customer turns.
-6. **On-topic resolution** — the conversation actually addresses the supplied `problem`, with no off-topic detours or invented unrelated issues.
-7. **Naming** — customer turns are labelled with `customer_name`; agent turns with `agent_name`.
+1. `turn_count` — `len(turns)` must equal `inputs.target_turn_count`.
+2. `alternation` — turns must alternate strictly between `customer` and `agent`, starting with `customer`.
+3. `first_turn_parity` — `turns[0].content` must equal `body`.
+4. `persona_match` — the agent's behaviour and depth must match `ticket_type`: `docs_request` is a docs pointer + summary; `l1` is KB-style; `l2` is methodical multi-hypothesis troubleshooting; `l3` is hypothesis-driven specialist work.
+5. `tier_tone_consistency` — customer language must reflect both `customer_tier` (entitlements register) and `customer_tone` (voice) consistently across every customer turn. Drift mid-conversation is an error.
+6. `on_topic_resolution` — every turn must concern the supplied `problem`; off-topic detours or invented unrelated issues are errors.
+7. `naming` — customer turns must be labelled with `customer_name`; agent turns with `agent_name`. Any other name is an error.
+8. `length_band` — `body` is 3–6 sentences; turn content is 1–6 sentences. One-word turns or multi-paragraph monologues are errors.
+9. `agent_overreach` — the agent must not promise actions outside its tier (e.g. `l1` dispatching field service, `docs_request` running diagnostics).
 
-For each rule violated, emit one Issue with severity ("error" for hard violations, "warning" for stylistic concerns), location (which field/turn index), rule_violated (short id), explanation, and an optional suggested_fix.
+For each rule violated, emit one Issue with `severity` ("error" for hard violations, "warning" for stylistic concerns), `location` (which field or turn index), `rule_violated` (one of the ids above, verbatim), `explanation`, and an optional `suggested_fix`.
 
 Set `passed=true` only when there are no `error`-severity issues. Set `checker="combined_resolution_check"`.
