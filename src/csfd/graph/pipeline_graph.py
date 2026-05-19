@@ -140,6 +140,7 @@ async def init_run_node(
                     "problem_database": settings.problem_database.model_dump(),
                     "tickets": settings.tickets.model_dump(),
                     "validation": settings.validation.model_dump(),
+                    "embedding": settings.embedding.model_dump(),
                 },
                 ensure_ascii=False,
             ),

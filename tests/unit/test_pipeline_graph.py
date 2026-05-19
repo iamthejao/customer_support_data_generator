@@ -183,7 +183,7 @@ def test_init_run_node_writes_run_record(tmp_path: Path) -> None:
         assert len(run.git_sha) == 40
     assert run.config_snapshot_json  # non-empty
     snapshot = json.loads(run.config_snapshot_json)
-    assert set(snapshot.keys()) == {"problem_database", "tickets", "validation"}
+    assert set(snapshot.keys()) == {"problem_database", "tickets", "validation", "embedding"}
     assert run.stats_json is None  # not populated until finalize
 
 
