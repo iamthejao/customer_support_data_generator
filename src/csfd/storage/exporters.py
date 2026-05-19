@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import struct
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ _TABLES: dict[str, str] = {
     "resolutions": "SELECT * FROM resolutions WHERE run_id = ?",
     "lineage": "SELECT * FROM lineage WHERE run_id = ?",
     "agent_traces": "SELECT * FROM agent_traces WHERE run_id = ?",
+    "problem_embeddings": "SELECT * FROM problem_embeddings WHERE run_id = ?",
 }
 
 
@@ -26,6 +28,15 @@ def _serialise(v: Any) -> Any:
     if isinstance(v, datetime):
         return v.isoformat()
     return v
+
+
+def _row_to_payload(table: str, row: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {k: _serialise(row[k]) for k in row.keys()}
+    if table == "problem_embeddings":
+        blob = row["vector"]
+        dim = int(row["dim"])
+        payload["vector"] = list(struct.unpack(f"<{dim}f", blob))
+    return payload
 
 
 def export_run_to_jsonl(db: Database, run_id: str, *, out_dir: Path) -> list[Path]:
@@ -41,7 +52,7 @@ def export_run_to_jsonl(db: Database, run_id: str, *, out_dir: Path) -> list[Pat
             rows = conn.execute(sql, (run_id,)).fetchall()
             with path.open("w", encoding="utf-8") as f:
                 for r in rows:
-                    payload = {k: _serialise(r[k]) for k in r.keys()}
+                    payload = _row_to_payload(table, r)
                     f.write(json.dumps(payload, separators=(",", ":"), default=str))
                     f.write("\n")
             written.append(path)
@@ -69,8 +80,9 @@ def export_run_to_parquet(db: Database, run_id: str, *, out_dir: Path) -> list[P
             cols = list(rows[0].keys())
             data: dict[str, list[Any]] = {c: [] for c in cols}
             for r in rows:
+                payload = _row_to_payload(table, r)
                 for c in cols:
-                    data[c].append(_serialise(r[c]))
+                    data[c].append(payload[c])
             path = run_dir / f"{table}.parquet"
             pq.write_table(pa.Table.from_pydict(data), path)
             written.append(path)
