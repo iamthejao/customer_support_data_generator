@@ -186,14 +186,27 @@ def build_pipeline_graph(
     is used by every graph node body for sqlite writes (the sync ``db`` is
     still used for read paths that don't need to be async-safe).
     """
+    from csfd.embeddings.client import OpenAICompatEmbedder
     from csfd.graph.phase1_graph import build_phase1_subgraph
     from csfd.graph.phase2_graph import build_phase2_subgraph
 
     adb_local = adb if adb is not None else AsyncDatabase(db.path)
+    embedder = None
+    if settings.embedding.enabled:
+        embedder = OpenAICompatEmbedder(
+            base_url=settings.embedding.base_url,
+            api_key="ollama" if "localhost" in settings.embedding.base_url else None,
+            model=settings.embedding.model,
+            dim=settings.embedding.dim,
+            timeout_s=settings.embedding.timeout_s,
+        )
     g: StateGraph[PipelineState, Any, PipelineState, PipelineState] = StateGraph(PipelineState)
     g.add_node("init_run", partial(init_run_node, db=db, adb=adb_local, settings=settings))
     g.add_node(
-        "phase1", build_phase1_subgraph(factory=factory, db=db, adb=adb_local, settings=settings)
+        "phase1",
+        build_phase1_subgraph(
+            factory=factory, db=db, adb=adb_local, settings=settings, embedder=embedder
+        ),
     )
     g.add_node(
         "phase2", build_phase2_subgraph(factory=factory, db=db, adb=adb_local, settings=settings)
