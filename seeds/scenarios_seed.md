@@ -1,7 +1,7 @@
 # CoolTherm — Customer Service Cases (Seed File)
 
 > **Purpose of this file.** A structured seed for generation software. It describes the five
-> customer-service business cases used in the Wissant Showcase, with the fictional manufacturer
+> customer-service business cases used in this project, with the fictional manufacturer
 > **CoolTherm Industrial Chillers** as the running example. Each case is written as a left-to-right
 > story: what it costs today, how agentic AI changes it, and what the customer gets back.
 >

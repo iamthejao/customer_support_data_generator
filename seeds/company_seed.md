@@ -1,8 +1,8 @@
 # CoolTherm Industrial Chillers — Company Profile (Seed File)
 
 > **Purpose of this file.** A structured seed for generation software. It describes the fictional
-> manufacturer **CoolTherm Industrial Chillers**, the running example used throughout the Wissant
-> Showcase so that customers, machines, and resolution flows stay concrete.
+> manufacturer **CoolTherm Industrial Chillers**, the running example used throughout this
+> project so that customers, machines, and resolution flows stay concrete.
 >
 > Fields marked **[inferred]** are lightly enriched additions a generator would plausibly need to
 > populate a believable instance. They are reasonable inferences consistent with the rest of this
@@ -13,7 +13,7 @@
 ## Identity
 
 CoolTherm Industrial Chillers is a fictional original equipment manufacturer (OEM) of industrial
-water chillers. It exists only as a demonstration vehicle: the Wissant Showcase uses it as a
+water chillers. It exists only as a demonstration vehicle: this project uses it as a
 running example so that prospects can see and feel how agentic AI customer service works against
 concrete customers, machines, and resolution flows. All data associated with CoolTherm is
 fake/simulated.
@@ -123,7 +123,7 @@ AI tangible.
 | Field | Value |
 |---|---|
 | Company | CoolTherm Industrial Chillers |
-| Status | Fictional running example for the Wissant Showcase |
+| Status | Fictional running example for this project |
 | Industry | Industrial water chillers (process cooling) |
 | End markets | Plastics, food processing, chemical production |
 | Equipment role | Mission-critical process temperature regulation |
