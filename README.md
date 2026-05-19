@@ -270,11 +270,13 @@ Live LLM tests are gated behind `-m live_llm`. The retry sub-loop (generator →
 
 Concrete next steps that would meaningfully raise the quality, throughput, or realism of the generated datasets. Each is scoped so it can land as an isolated PR without disturbing the determinism guarantees above.
 
-1. **Step 0 — prompt optimization pass before generation.** Today the generator and checker prompt templates under `prompts/` are static Jinja files tuned by hand. Adding an explicit pre-pipeline step that takes the seeds, the active model, and the configured ticket distributions and runs a short optimization loop (e.g. APE / OPRO / DSPy-style critique-and-rewrite, or a held-out scoring rubric using the combined checker) would let each run start from prompts already adapted to the target model and dataset, instead of relying on a one-size-fits-all template. The optimized prompts are persisted under the run's provenance (`prompt_id`, `prompt_version`) so results stay reproducible, and Phase 1 / Phase 2 graphs consume them unchanged.
+1. **Step 0 — prompt optimization.** current prompts in the repository are simplistic, mostly used for testing purposes only.
 
 2. **De-duplicate problems by embedding similarity at commit time.** `commit_problem` currently accepts any candidate that passes the checker, so two near-identical root causes can both enter the Problem Database — which silently inflates "diversity" metrics and biases Phase 2 allocations. Embedding each accepted candidate (e.g. a small local model) and rejecting commits whose cosine similarity to an existing problem exceeds a configurable threshold would enforce semantic spread at the database level. On rejection, the Phase 1 retry sub-loop already handles re-generation cleanly; the only new state is an embeddings table keyed on `problem_id` for fast in-run lookup.
 
 3. **Add creativity / noise agents to diversify generation.** Right now every problem and every resolution is produced by a single generator prompt against the same seed material, which biases output toward the model's mode and produces tickets that feel stylistically homogeneous. A lightweight "noise" agent inserted before the generator — varying customer voice, urgency, partial information, typos, regional phrasing, or back-and-forth ambiguity per slot — would yield datasets that better stress-test routing, RAG retrieval, and agent handling of messy real-world inputs. Determinism is preserved by deriving the noise agent's choices from `(run_seed, slot_index)`.
+
+4. **Turn-based ticket creation.** Right now, the whole conversation is created by a generation agent. This can be improved and made more realistic by creating 2 agents, one mimicking the customer and another mimicking the customer support, that chat in turns. Each agent will have access to partial data, making the "problem discovery" more realistic.
 
 ## License
 
