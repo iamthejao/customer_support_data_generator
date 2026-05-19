@@ -44,7 +44,7 @@ from csfd.seeds.scenarios import ScenarioCatalogue
 from csfd.settings import AppSettings, load_settings
 from csfd.storage.db import Database
 from csfd.storage.db_async import AsyncDatabase
-from csfd.storage.repository import ProblemRecord, RunRecord, RunRepo
+from csfd.storage.repository import ProblemEmbeddingRecord, ProblemRecord, RunRecord, RunRepo
 from csfd.ticket_types.definitions import TicketType
 from csfd.utils.git import current_git_sha
 
@@ -88,6 +88,8 @@ class PipelineState(BaseModel):
     target_complexities: list[str] = Field(default_factory=list)
     problem_index: int = 0
     problems_committed: list[ProblemRecord] = Field(default_factory=list)
+    problem_embeddings_committed: list[ProblemEmbeddingRecord] = Field(default_factory=list)
+    dedup_enabled: bool = False
 
     # --- Phase 2 progress ---
     plan_slots: list[_PlanSlot] = Field(default_factory=list)
@@ -97,6 +99,7 @@ class PipelineState(BaseModel):
     retry_attempt: int = 0
     current_problem_draft: ProblemBrainstormOutput | None = None
     current_resolution_draft: ResolutionOutput | None = None
+    current_problem_embedding: list[float] | None = None
     # Full verdict (not just the bool) so the next retry can feed `issues` into
     # the prompt's "prior attempt failed validation" block.
     last_verdict: Verdict | None = None
