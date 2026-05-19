@@ -49,6 +49,7 @@ YAML that controls the deterministic shape of the run — counts, proportions, r
   - `problem_database` — Phase 1 controls: `count` and `complexity_proportions` (simple / medium / complex), applied with largest-remainder rounding.
   - `tickets` — Phase 2 controls: `total`, `type_proportions`, `tier_proportions`, `tone_proportions_per_type`, `turns_per_type`, and `assignment_strategy` (`complexity_weighted` or `uniform`).
   - `validation` — whether the combined checker runs after each generation and how its verdict gates retries.
+  - `embedding` — opt-in Phase 1 dedup. When `enabled: true`, accepted candidates are embedded via an OpenAI-compatible endpoint (defaults to local Ollama at `http://localhost:11434/v1` with `embeddinggemma:300m`) and rejected if cosine similarity to any already-committed problem in the run meets or exceeds `threshold`. `dim` truncates the model's native vector (Matryoshka); `text_template` selects between `title_summary` and `title_summary_background`.
 - **`config/profiles/*.yaml`** — overlays applied on top of `default.yaml` via `--profile <name>`. Shipped overlays cover model routing (`claude-only`, `claude-cli`, `local-only`, `mixed`) and a small `dev` overlay that shrinks problem/ticket counts for fast iteration.
 - **`.env`** — credentials and endpoints (`ANTHROPIC_API_KEY`, `LOCAL_BASE_URL`, …) read at runtime. Not part of the deterministic snapshot.
 
@@ -93,7 +94,7 @@ The parent graph owns run lifecycle and durability. It creates the `runs` row, c
 
 ### Phase 1 graph — Problem Database
 
-Phase 1 turns company/scenario seeds into a reusable Problem Database. It deterministically assigns target complexities, asks the generator to produce one problem at a time, validates each candidate with the combined checker, retries on failed verdicts, and persists accepted `ProblemV2Record` rows. Its output is not a ticket yet; it is the controlled pool of root causes that Phase 2 will allocate across ticket slots.
+Phase 1 turns company/scenario seeds into a reusable Problem Database. It deterministically assigns target complexities, asks the generator to produce one problem at a time, validates each candidate with the combined checker, retries on failed verdicts, and persists accepted `ProblemV2Record` rows. Its output is not a ticket yet; it is the controlled pool of root causes that Phase 2 will allocate across ticket slots. After validation passes, accepted candidates are embedded and rejected if cosine similarity to any already-committed problem in the run exceeds `embedding.threshold`; rejections re-enter the same retry sub-loop with a synthesised `near_duplicate` verdict that surfaces the matched problem's title and summary to the next generation attempt.
 
 ### Phase 2 graph — Requests and resolutions
 
@@ -113,11 +114,15 @@ flowchart TB
         IP[init_phase1<br>target_complexities via<br>largest-remainder]
         GP[generate_problem<br>LLM + TracingAdapter]
         VP[validate_problem<br>combined_checker, optional]
+        DP[dedup_problem<br>cosine vs in-run embeddings]
         CP[commit_problem<br>persist ProblemV2Record]
         IP --> GP
         GP --> VP
         VP -->|fail & retries left| GP
-        VP -->|pass / exhausted| CP
+        VP -->|pass| DP
+        DP -->|unique| CP
+        DP -->|duplicate & retries left| GP
+        DP -->|exhausted| CP
         CP -->|more problems| GP
     end
     subgraph P2["Phase 2 subgraph (csfd.graph.phase2_graph)"]
@@ -155,6 +160,8 @@ A single `csfd generate` invocation walks the parent graph from top to bottom. E
 5. **Validate the problem.** If validation is enabled, `validate_problem` runs the combined checker LLM against the candidate. The checker's trace row links back to the generator's via `parent_trace_id` and records a `verdict` plus `verdict_issues_json`.
 
 6. **Retry sub-loop.** If the verdict is `fail` and retries remain, control returns to `generate_problem` and the generator tries again — same target complexity, fresh LLM call, fresh trace row. If retries are exhausted, the last candidate is accepted with a quality flag so the run never stalls.
+
+6a. **Dedup the accepted candidate.** When `embedding.enabled` is true, `dedup_problem` embeds the candidate (title + summary by default) via Ollama's OpenAI-compatible `/v1/embeddings` endpoint and compares against the in-run cache of already-committed problem embeddings. If the highest cosine score meets or exceeds `embedding.threshold`, a synthetic `Verdict(checker="dedup_problem", passed=False, issues=[Issue(rule_violated="near_duplicate_of_committed_problem", ...)])` is written to `last_verdict`; the generator's next attempt sees the matched problem's title and summary in `prior_verdicts`. Retries share the validation budget. If retries are exhausted, the candidate is committed with `quality_flag = "warning:dedup_exhausted"`.
 
 7. **Commit the problem.** `commit_problem` persists an accepted `ProblemV2Record` into the `problems` table.
 
@@ -204,6 +211,8 @@ Determinism guarantee: given identical config and seed, two runs against fresh d
 
 Pin an exported benchmark to its provenance via `runs.config_snapshot_json` and the per-row `prompt_id` / `model_id` columns in `agent_traces`.
 
+Embedding scores depend on the Ollama model/version and platform: a candidate whose cosine is very close to `embedding.threshold` can flip across Ollama upgrades. The deterministic allocation guarantee (slot-by-slot lineage) is unchanged.
+
 ## Benchmark consumption
 
 The "gold tuple" join over `problems`, `incoming_requests`, `resolutions`, and `lineage`:
@@ -228,6 +237,7 @@ Exports under `data/exports/<run_id>/`:
 - `resolutions.jsonl(.parquet)` — multi-turn conversations
 - `lineage.jsonl(.parquet)` — problem → request → resolution traceability
 - `agent_traces.jsonl(.parquet)` — every LLM call (`prompt_id`, `model_provider`, `model_id`, `attempt`, `latency_ms`, `verdict`)
+- `problem_embeddings.jsonl(.parquet)` — per-problem dedup vector (`problem_id`, `model`, `dim`, deserialized `vector: list[float]`)
 - `manifest.json` — SHA-256 of every JSONL file
 
 ## Configuration profiles
@@ -242,6 +252,8 @@ Pre-built overlays under `config/profiles/`:
 ```bash
 csfd generate --profile mixed
 ```
+
+Embedding-based dedup is enabled in `local-only` and `mixed` (which run against a local Ollama instance). `claude-only`, `claude-cli`, and `dev` leave it disabled because Anthropic and the Claude CLI do not expose embedding endpoints.
 
 ## CLI
 
@@ -272,11 +284,9 @@ Concrete next steps that would meaningfully raise the quality, throughput, or re
 
 1. **Prompt optimization.** Current agent prompts in the repository are simplistic, mostly used for testing purposes only.
 
-2. **De-duplicate problems by embedding similarity at commit time.** `commit_problem` currently accepts any candidate that passes the checker, so two near-identical root causes can both enter the Problem Database — which silently inflates "diversity" metrics and biases Phase 2 allocations. Embedding each accepted candidate (e.g. a small local model) and rejecting commits whose cosine similarity to an existing problem exceeds a configurable threshold would enforce semantic spread at the database level. On rejection, the Phase 1 retry sub-loop already handles re-generation cleanly; the only new state is an embeddings table keyed on `problem_id` for fast in-run lookup.
+2. **Add creativity / noise agents to diversify generation.** Right now every problem and every resolution is produced by a single generator prompt against the same seed material, which biases output toward the model's mode and produces tickets that feel stylistically homogeneous. A lightweight "noise" agent inserted before the generator — varying customer voice, urgency, partial information, typos, regional phrasing, or back-and-forth ambiguity per slot — would yield datasets that better stress-test routing, RAG retrieval, and agent handling of messy real-world inputs. Determinism is preserved by deriving the noise agent's choices from `(run_seed, slot_index)`.
 
-3. **Add creativity / noise agents to diversify generation.** Right now every problem and every resolution is produced by a single generator prompt against the same seed material, which biases output toward the model's mode and produces tickets that feel stylistically homogeneous. A lightweight "noise" agent inserted before the generator — varying customer voice, urgency, partial information, typos, regional phrasing, or back-and-forth ambiguity per slot — would yield datasets that better stress-test routing, RAG retrieval, and agent handling of messy real-world inputs. Determinism is preserved by deriving the noise agent's choices from `(run_seed, slot_index)`.
-
-4. **Turn-based ticket creation.** Right now, the whole conversation is created by a generation agent. This can be improved and made more realistic by creating 2 agents, one mimicking the customer and another mimicking the customer support, that chat in turns. Each agent will have access to partial data, making the "problem discovery" more realistic.
+3. **Turn-based ticket creation.** Right now, the whole conversation is created by a generation agent. This can be improved and made more realistic by creating 2 agents, one mimicking the customer and another mimicking the customer support, that chat in turns. Each agent will have access to partial data, making the "problem discovery" more realistic.
 
 ## License
 

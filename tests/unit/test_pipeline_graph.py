@@ -183,7 +183,7 @@ def test_init_run_node_writes_run_record(tmp_path: Path) -> None:
         assert len(run.git_sha) == 40
     assert run.config_snapshot_json  # non-empty
     snapshot = json.loads(run.config_snapshot_json)
-    assert set(snapshot.keys()) == {"problem_database", "tickets", "validation"}
+    assert set(snapshot.keys()) == {"problem_database", "tickets", "validation", "embedding"}
     assert run.stats_json is None  # not populated until finalize
 
 
@@ -266,3 +266,12 @@ def test_make_pipeline_studio_graph_returns_compiled_graph() -> None:
     assert isinstance(compiled, CompiledStateGraph)
     node_names = set(compiled.get_graph().nodes.keys())
     assert {"init_run", "phase1", "phase2", "finalize_run"}.issubset(node_names)
+
+
+def test_pipeline_state_has_dedup_fields() -> None:
+    from csfd.graph.pipeline_graph import PipelineState
+
+    fields = PipelineState.model_fields
+    assert "problem_embeddings_committed" in fields
+    assert "current_problem_embedding" in fields
+    assert "dedup_enabled" in fields

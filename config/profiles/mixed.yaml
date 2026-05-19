@@ -6,3 +6,6 @@ agents:
     provider: openai_compat
     model: llama3.1:8b
     base_url: http://localhost:11434/v1
+
+embedding:
+  enabled: true

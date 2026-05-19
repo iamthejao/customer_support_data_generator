@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import struct
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -761,3 +762,65 @@ class LineageRepo:
                 (run_id,),
             ).fetchone()
         return int(row["n"])
+
+
+@dataclass(slots=True)
+class ProblemEmbeddingRecord:
+    problem_id: str
+    run_id: str
+    model: str
+    dim: int
+    vector: tuple[float, ...]
+    created_at: datetime
+
+
+def _pack_vector(vec: tuple[float, ...]) -> bytes:
+    return struct.pack(f"<{len(vec)}f", *vec)
+
+
+def _unpack_vector(blob: bytes, dim: int) -> tuple[float, ...]:
+    return struct.unpack(f"<{dim}f", blob)
+
+
+def _row_to_problem_embedding(row: sqlite3.Row) -> ProblemEmbeddingRecord:
+    dim = int(row["dim"])
+    return ProblemEmbeddingRecord(
+        problem_id=row["problem_id"],
+        run_id=row["run_id"],
+        model=row["model"],
+        dim=dim,
+        vector=_unpack_vector(row["vector"], dim),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+class ProblemEmbeddingRepo:
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    def list_for_run(self, run_id: str) -> list[ProblemEmbeddingRecord]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT problem_id, run_id, model, dim, vector, created_at "
+                "FROM problem_embeddings WHERE run_id = ? ORDER BY problem_id",
+                (run_id,),
+            ).fetchall()
+        return [_row_to_problem_embedding(r) for r in rows]
+
+    async def acreate(self, adb: AsyncDatabase, rec: ProblemEmbeddingRecord) -> None:
+        if len(rec.vector) != rec.dim:
+            raise ValueError(f"vector length {len(rec.vector)} != dim {rec.dim}")
+        async with adb.connect() as conn:
+            await conn.execute(
+                "INSERT OR IGNORE INTO problem_embeddings "
+                "(problem_id, run_id, model, dim, vector, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    rec.problem_id,
+                    rec.run_id,
+                    rec.model,
+                    rec.dim,
+                    _pack_vector(rec.vector),
+                    rec.created_at.isoformat(),
+                ),
+            )

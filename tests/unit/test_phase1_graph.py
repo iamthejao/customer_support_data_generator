@@ -19,8 +19,9 @@ from csfd.agents.base import Verdict
 from csfd.agents.factory import AgentFactory
 from csfd.graph.phase1_graph import (
     _route_after_commit_problem,
+    _route_after_dedup_problem,
     _route_after_generate_problem,
-    _route_after_validate_problem,
+    _route_after_validate_problem_with_dedup,
     build_phase1_subgraph,
 )
 from csfd.graph.pipeline_graph import PipelineState
@@ -32,6 +33,7 @@ from csfd.settings import (
     AgentLLMConfig,
     AppSettings,
     BudgetConfig,
+    EmbeddingConfig,
     ObservabilityConfig,
     PipelineConfig,
     ProblemDatabaseConfig,
@@ -138,8 +140,9 @@ def test_route_after_validate_pass() -> None:
         last_verdict=Verdict(checker="x", passed=True, issues=[]),
         retry_attempt=0,
         max_retries=2,
+        dedup_enabled=False,
     )
-    assert _route_after_validate_problem(state) == "pass"
+    assert _route_after_validate_problem_with_dedup(state) == "pass_to_commit"
 
 
 def test_route_after_validate_retry_when_attempts_left() -> None:
@@ -147,8 +150,9 @@ def test_route_after_validate_retry_when_attempts_left() -> None:
         last_verdict=Verdict(checker="x", passed=False, issues=[]),
         retry_attempt=0,
         max_retries=2,
+        dedup_enabled=False,
     )
-    assert _route_after_validate_problem(state) == "retry"
+    assert _route_after_validate_problem_with_dedup(state) == "retry"
 
 
 def test_route_after_validate_exhausted_at_max_retries() -> None:
@@ -156,8 +160,60 @@ def test_route_after_validate_exhausted_at_max_retries() -> None:
         last_verdict=Verdict(checker="x", passed=False, issues=[]),
         retry_attempt=2,
         max_retries=2,
+        dedup_enabled=False,
     )
-    assert _route_after_validate_problem(state) == "exhausted"
+    assert _route_after_validate_problem_with_dedup(state) == "exhausted"
+
+
+def test_route_after_validate_pass_to_dedup_when_dedup_enabled() -> None:
+    state = _make_state(
+        last_verdict=Verdict(checker="x", passed=True, issues=[]),
+        retry_attempt=0,
+        max_retries=2,
+        dedup_enabled=True,
+    )
+    assert _route_after_validate_problem_with_dedup(state) == "pass_to_dedup"
+
+
+def test_route_after_dedup_unique_when_no_verdict() -> None:
+    state = _make_state(last_verdict=None, retry_attempt=0, max_retries=2)
+    assert _route_after_dedup_problem(state) == "unique"
+
+
+def test_route_after_dedup_unique_when_verdict_passed() -> None:
+    state = _make_state(
+        last_verdict=Verdict(checker="dedup_problem", passed=True, issues=[]),
+        retry_attempt=0,
+        max_retries=2,
+    )
+    assert _route_after_dedup_problem(state) == "unique"
+
+
+def test_route_after_dedup_unique_when_checker_is_not_dedup() -> None:
+    state = _make_state(
+        last_verdict=Verdict(checker="other", passed=False, issues=[]),
+        retry_attempt=0,
+        max_retries=2,
+    )
+    assert _route_after_dedup_problem(state) == "unique"
+
+
+def test_route_after_dedup_duplicate_when_attempts_left() -> None:
+    state = _make_state(
+        last_verdict=Verdict(checker="dedup_problem", passed=False, issues=[]),
+        retry_attempt=0,
+        max_retries=2,
+    )
+    assert _route_after_dedup_problem(state) == "duplicate"
+
+
+def test_route_after_dedup_exhausted_at_max_retries() -> None:
+    state = _make_state(
+        last_verdict=Verdict(checker="dedup_problem", passed=False, issues=[]),
+        retry_attempt=2,
+        max_retries=2,
+    )
+    assert _route_after_dedup_problem(state) == "dedup_exhausted"
 
 
 def test_route_after_commit_with_more_problems() -> None:
@@ -202,3 +258,17 @@ def test_build_phase1_subgraph_compiles_with_expected_nodes(tmp_path: Path) -> N
         "_mark_validation_skipped",
     }
     assert expected.issubset(node_names)
+
+
+def test_dedup_node_present_when_embedder_provided(tmp_path: Path) -> None:
+    from csfd.embeddings.fake import FakeEmbedder
+
+    settings = _build_stub_settings()
+    settings = settings.model_copy(update={"embedding": EmbeddingConfig(enabled=True, dim=8)})
+    factory = _build_stub_factory()
+    db = Database(path=tmp_path / "t.sqlite")
+
+    compiled = build_phase1_subgraph(
+        factory=factory, db=db, settings=settings, embedder=FakeEmbedder(dim=8)
+    )
+    assert "dedup_problem" in compiled.get_graph().nodes

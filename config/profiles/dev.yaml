@@ -6,3 +6,6 @@ pipeline:
   budget:
     max_tokens_per_run: 100000
     max_usd_per_run: 1.0
+
+embedding:
+  enabled: false

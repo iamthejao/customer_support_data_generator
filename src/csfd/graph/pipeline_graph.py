@@ -44,7 +44,7 @@ from csfd.seeds.scenarios import ScenarioCatalogue
 from csfd.settings import AppSettings, load_settings
 from csfd.storage.db import Database
 from csfd.storage.db_async import AsyncDatabase
-from csfd.storage.repository import ProblemRecord, RunRecord, RunRepo
+from csfd.storage.repository import ProblemEmbeddingRecord, ProblemRecord, RunRecord, RunRepo
 from csfd.ticket_types.definitions import TicketType
 from csfd.utils.git import current_git_sha
 
@@ -88,6 +88,8 @@ class PipelineState(BaseModel):
     target_complexities: list[str] = Field(default_factory=list)
     problem_index: int = 0
     problems_committed: list[ProblemRecord] = Field(default_factory=list)
+    problem_embeddings_committed: list[ProblemEmbeddingRecord] = Field(default_factory=list)
+    dedup_enabled: bool = False
 
     # --- Phase 2 progress ---
     plan_slots: list[_PlanSlot] = Field(default_factory=list)
@@ -97,6 +99,7 @@ class PipelineState(BaseModel):
     retry_attempt: int = 0
     current_problem_draft: ProblemBrainstormOutput | None = None
     current_resolution_draft: ResolutionOutput | None = None
+    current_problem_embedding: list[float] | None = None
     # Full verdict (not just the bool) so the next retry can feed `issues` into
     # the prompt's "prior attempt failed validation" block.
     last_verdict: Verdict | None = None
@@ -137,6 +140,7 @@ async def init_run_node(
                     "problem_database": settings.problem_database.model_dump(),
                     "tickets": settings.tickets.model_dump(),
                     "validation": settings.validation.model_dump(),
+                    "embedding": settings.embedding.model_dump(),
                 },
                 ensure_ascii=False,
             ),
@@ -183,14 +187,27 @@ def build_pipeline_graph(
     is used by every graph node body for sqlite writes (the sync ``db`` is
     still used for read paths that don't need to be async-safe).
     """
+    from csfd.embeddings.client import OpenAICompatEmbedder
     from csfd.graph.phase1_graph import build_phase1_subgraph
     from csfd.graph.phase2_graph import build_phase2_subgraph
 
     adb_local = adb if adb is not None else AsyncDatabase(db.path)
+    embedder = None
+    if settings.embedding.enabled:
+        embedder = OpenAICompatEmbedder(
+            base_url=settings.embedding.base_url,
+            api_key="ollama" if "localhost" in settings.embedding.base_url else None,
+            model=settings.embedding.model,
+            dim=settings.embedding.dim,
+            timeout_s=settings.embedding.timeout_s,
+        )
     g: StateGraph[PipelineState, Any, PipelineState, PipelineState] = StateGraph(PipelineState)
     g.add_node("init_run", partial(init_run_node, db=db, adb=adb_local, settings=settings))
     g.add_node(
-        "phase1", build_phase1_subgraph(factory=factory, db=db, adb=adb_local, settings=settings)
+        "phase1",
+        build_phase1_subgraph(
+            factory=factory, db=db, adb=adb_local, settings=settings, embedder=embedder
+        ),
     )
     g.add_node(
         "phase2", build_phase2_subgraph(factory=factory, db=db, adb=adb_local, settings=settings)
