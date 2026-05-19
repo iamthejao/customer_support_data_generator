@@ -1,0 +1,31 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	build_allocation_plan(build_allocation_plan)
+	generate_resolution(generate_resolution)
+	validate_resolution(validate_resolution)
+	commit_resolution(commit_resolution)
+	_bump_retry(_bump_retry)
+	_mark_exhausted(_mark_exhausted)
+	_mark_validation_skipped(_mark_validation_skipped)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> build_allocation_plan;
+	_bump_retry --> generate_resolution;
+	_mark_exhausted --> commit_resolution;
+	_mark_validation_skipped --> commit_resolution;
+	build_allocation_plan -. &nbsp;done&nbsp; .-> __end__;
+	build_allocation_plan -. &nbsp;generate&nbsp; .-> generate_resolution;
+	commit_resolution -. &nbsp;done&nbsp; .-> __end__;
+	commit_resolution -. &nbsp;next&nbsp; .-> generate_resolution;
+	generate_resolution -. &nbsp;commit&nbsp; .-> _mark_validation_skipped;
+	generate_resolution -. &nbsp;validate&nbsp; .-> validate_resolution;
+	validate_resolution -. &nbsp;retry&nbsp; .-> _bump_retry;
+	validate_resolution -. &nbsp;exhausted&nbsp; .-> _mark_exhausted;
+	validate_resolution -. &nbsp;pass&nbsp; .-> commit_resolution;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

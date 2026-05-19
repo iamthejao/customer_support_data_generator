@@ -1,0 +1,37 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	init_phase1(init_phase1)
+	generate_problem(generate_problem)
+	validate_problem(validate_problem)
+	dedup_problem(dedup_problem)
+	commit_problem(commit_problem)
+	_bump_retry(_bump_retry)
+	_mark_exhausted(_mark_exhausted)
+	_mark_dedup_exhausted(_mark_dedup_exhausted)
+	_mark_validation_skipped(_mark_validation_skipped)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> init_phase1;
+	_bump_retry --> generate_problem;
+	_mark_dedup_exhausted --> commit_problem;
+	_mark_exhausted --> commit_problem;
+	_mark_validation_skipped --> commit_problem;
+	commit_problem -. &nbsp;done&nbsp; .-> __end__;
+	commit_problem -. &nbsp;next&nbsp; .-> generate_problem;
+	dedup_problem -. &nbsp;duplicate&nbsp; .-> _bump_retry;
+	dedup_problem -. &nbsp;dedup_exhausted&nbsp; .-> _mark_dedup_exhausted;
+	dedup_problem -. &nbsp;unique&nbsp; .-> commit_problem;
+	generate_problem -. &nbsp;commit&nbsp; .-> _mark_validation_skipped;
+	generate_problem -. &nbsp;validate&nbsp; .-> validate_problem;
+	init_phase1 --> generate_problem;
+	validate_problem -. &nbsp;retry&nbsp; .-> _bump_retry;
+	validate_problem -. &nbsp;exhausted&nbsp; .-> _mark_exhausted;
+	validate_problem -. &nbsp;pass_to_commit&nbsp; .-> commit_problem;
+	validate_problem -. &nbsp;pass_to_dedup&nbsp; .-> dedup_problem;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
