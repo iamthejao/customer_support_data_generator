@@ -62,6 +62,17 @@ class ValidationConfig(BaseModel):
     max_retries: int = 2
 
 
+class EmbeddingConfig(BaseModel):
+    enabled: bool = False
+    provider: Literal["openai_compat"] = "openai_compat"
+    base_url: str = "http://localhost:11434/v1"
+    model: str = "embeddinggemma:300m"
+    dim: int | None = 768
+    threshold: float = 0.85
+    text_template: Literal["title_summary", "title_summary_background"] = "title_summary"
+    timeout_s: int = 30
+
+
 # ---- Common / cross-cutting ----
 
 
@@ -96,6 +107,7 @@ class AppSettings(BaseModel):
     problem_database: ProblemDatabaseConfig
     tickets: TicketsConfig
     validation: ValidationConfig = Field(default_factory=ValidationConfig)
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     observability: ObservabilityConfig
     storage: StorageConfig
     env: EnvSecrets = Field(default_factory=EnvSecrets)

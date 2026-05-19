@@ -70,3 +70,13 @@ storage:
   sqlite_path: "data/runs.sqlite"
   exports_dir: "data/exports"
   exports_format: ["jsonl", "parquet"]
+
+embedding:
+  enabled: false
+  provider: openai_compat
+  base_url: http://localhost:11434/v1
+  model: embeddinggemma:300m
+  dim: 768
+  threshold: 0.85
+  text_template: title_summary
+  timeout_s: 30
