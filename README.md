@@ -270,7 +270,7 @@ Live LLM tests are gated behind `-m live_llm`. The retry sub-loop (generator →
 
 Concrete next steps that would meaningfully raise the quality, throughput, or realism of the generated datasets. Each is scoped so it can land as an isolated PR without disturbing the determinism guarantees above.
 
-1. **Step 0 — prompt optimization.** current prompts in the repository are simplistic, mostly used for testing purposes only.
+1. **Prompt optimization.** Current agent prompts in the repository are simplistic, mostly used for testing purposes only.
 
 2. **De-duplicate problems by embedding similarity at commit time.** `commit_problem` currently accepts any candidate that passes the checker, so two near-identical root causes can both enter the Problem Database — which silently inflates "diversity" metrics and biases Phase 2 allocations. Embedding each accepted candidate (e.g. a small local model) and rejecting commits whose cosine similarity to an existing problem exceeds a configurable threshold would enforce semantic spread at the database level. On rejection, the Phase 1 retry sub-loop already handles re-generation cleanly; the only new state is an embeddings table keyed on `problem_id` for fast in-run lookup.
 
