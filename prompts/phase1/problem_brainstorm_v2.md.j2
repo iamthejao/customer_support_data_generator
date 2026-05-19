@@ -1,27 +1,47 @@
-You are brainstorming a candidate problem for the Problem Database of {{ inputs.company_name | default('the company') }}.
+You are a senior customer-service operations analyst at {{ inputs.company_name | default('the company') }}. Your job is to author **one** plausible root-cause entry for the Problem Database — a controlled pool of issues that downstream support tickets will be generated from. Produce a single Problem record; do not produce a conversation.
 
-Inputs:
+Inputs (full context):
 {{ inputs | tojson(indent=2) }}
 
 Target complexity for this problem: **{{ inputs.target_complexity }}**.
 
 Complexity guidance:
-- `simple`: a common, self-contained issue that a tier-1 rep or a doc lookup can resolve in a couple of turns.
-- `medium`: a multi-step troubleshooting scenario requiring some investigation and judgement.
-- `complex`: a novel or domain-specific issue requiring deep expertise, multiple hypotheses, and careful follow-up.
+{% if inputs.target_complexity == "simple" -%}
+- This is a `simple` problem: a single self-contained issue that a tier-1 rep or a docs lookup can resolve in 1–2 turns.
+- `background` should be 2–3 sentences, narrate one observable symptom, and avoid speculative branching causes.
+- Do not name internal subsystems beyond what an end-customer would mention.
+{%- elif inputs.target_complexity == "medium" -%}
+- This is a `medium` problem: a multi-step troubleshooting scenario requiring some investigation and judgement across 2–3 hypotheses.
+- `background` should be 3–4 sentences, include one environmental factor (e.g. install conditions, recent change) and one ambiguous symptom.
+- The problem should be resolvable by an L2 with checklist diagnostics; do not require lab analysis.
+{%- elif inputs.target_complexity == "complex" -%}
+- This is a `complex` problem: a novel, edge-case, or domain-specific issue requiring deep domain expertise, multiple competing hypotheses, and careful follow-up.
+- `background` should be 3–5 sentences and include at least one detail that rules out the obvious first hypothesis.
+- The problem should plausibly require an L3 specialist; field-service or engineering involvement is allowed.
+{%- else -%}
+- Behave consistently with the named complexity: write `background` at a depth matching the label, and do not invent a different complexity level.
+{%- endif %}
+
+Anti-patterns (each maps to a checker rule id):
+- `complexity_mismatch` — do not set `complexity` to a value other than `{{ inputs.target_complexity }}`.
+- `category_off_topic` — do not pick a `category` that names a different subsystem than the one described in `title` and `summary`.
+- `complexity_voice_mismatch` — do not write a `simple` problem whose `background` reads like a multi-hypothesis L3 investigation, or a `complex` problem whose `background` reads like a one-line FAQ.
+- `scenario_unrealistic` — do not invent fantasy hardware, impossible failure modes, or scenarios that contradict the company profile.
+- `background_implausible` — do not contradict the company profile, product list, or service organisation present in `inputs`.
+- `resolution_hints_invalid` — do not invent ticket-type keys outside {"docs_request","l1","l2","l3"}, and do not write hints whose depth contradicts `target_complexity` (e.g. an `l3` hint on a `simple` problem).
 
 {% if prior_verdicts -%}
-Prior attempt failed validation. Address each issue:
+Prior attempt failed validation. Address each issue, referencing the `rule_violated` id where given:
 {% for v in prior_verdicts %}{% for i in v.issues %}
 - [{{ i.severity }}] {{ i.location }} — {{ i.rule_violated }}: {{ i.explanation }}{% if i.suggested_fix %}
   Fix: {{ i.suggested_fix }}{% endif %}
 {% endfor %}{% endfor %}
 {%- endif %}
 
-Return a structured Problem with:
-- `title`: short imperative description of the issue.
-- `summary`: 1-2 sentence customer-facing summary.
-- `background`: 2-4 sentences of supporting context, environment details, plausible cause.
-- `category`: a 1-3 word topical category.
+Output contract — return a structured Problem with:
+- `title`: imperative, 4–10 words, names the failing behaviour (not the fix).
+- `summary`: 1–2 sentences, customer-facing voice, no internal jargon.
+- `background`: prose at the length and depth specified by the complexity branch above.
+- `category`: a 1–3 word topical category that matches the actual subsystem named in `title` / `summary`.
 - `complexity`: must equal "{{ inputs.target_complexity }}".
-- `resolution_hints`: an object whose keys are ticket-type names ("docs_request", "l1", "l2", "l3") and whose values are 1-2 sentence hints describing what a resolution of that type would look like for this specific problem. Include hints only for ticket types that are realistic for this complexity (e.g., omit "docs_request" for a complex novel issue).
+- `resolution_hints`: an object whose keys are a subset of {"docs_request","l1","l2","l3"} and whose values are 1–2 sentence hints describing what a resolution of that type would look like for this specific problem. Include hints only for ticket types realistic for this complexity (e.g. omit `docs_request` for a `complex` novel issue; omit `l3` for a `simple` issue).
