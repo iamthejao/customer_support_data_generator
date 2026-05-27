@@ -246,17 +246,23 @@ async def commit_problem_node(
     # Force-fit the LLM's complexity to the target — proportions are authoritative.
     target_complexity = state.target_complexities[i]
 
+    draft = state.current_problem_draft
     record = ProblemRecord(
         id=problem_id,
         run_id=state.run_id,
-        title=state.current_problem_draft.title,
-        summary=state.current_problem_draft.summary,
-        background=state.current_problem_draft.background,
-        category=state.current_problem_draft.category,
+        title=draft.title,
+        summary=draft.summary,
+        background=draft.background,
+        category=draft.category,
         complexity=target_complexity,
-        resolution_hints=state.current_problem_draft.resolution_hints,
+        resolution_hints=draft.resolution_hints,
         quality_flag=state.last_quality_flag,
         created_at=datetime.now(UTC),
+        symptoms=list(draft.symptoms),
+        root_cause=list(draft.root_cause),
+        fault_domain=str(draft.fault_domain),
+        customer_impact=str(draft.customer_impact),
+        tags=list(draft.tags),
     )
     await ProblemRepo(db).acreate(adb, record)
 

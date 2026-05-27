@@ -19,6 +19,23 @@ class ProblemComplexity(StrEnum):
     COMPLEX = "complex"
 
 
+class FaultDomain(StrEnum):
+    HARDWARE = "hardware"
+    SOFTWARE = "software"
+    CONFIGURATION = "configuration"
+    PROCESS = "process"
+    BILLING = "billing"
+    ACCOUNT = "account"
+    INTEGRATION = "integration"
+
+
+class CustomerImpact(StrEnum):
+    BLOCKED = "blocked"
+    DEGRADED = "degraded"
+    COSMETIC = "cosmetic"
+    INFORMATIONAL = "informational"
+
+
 @dataclass(slots=True, frozen=True)
 class TicketTypeMetadata:
     avg_turns: int
