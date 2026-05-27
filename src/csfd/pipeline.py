@@ -31,7 +31,7 @@ from csfd.seeds.company import CompanyProfile
 from csfd.seeds.scenarios import ScenarioCatalogue
 from csfd.settings import AppSettings
 from csfd.storage.db import Database
-from csfd.ticket_types.definitions import ProblemComplexity
+from csfd.ticket_types.definitions import CustomerImpact, FaultDomain, ProblemComplexity
 from csfd.utils.rng import largest_remainder
 
 if TYPE_CHECKING:
@@ -51,8 +51,13 @@ class ProblemBrainstormOutput(BaseModel):
     title: str
     summary: str
     background: str
+    symptoms: list[str] = Field(default_factory=list)
+    root_cause: list[str] = Field(default_factory=list)
     category: str
     complexity: ProblemComplexity
+    fault_domain: FaultDomain = FaultDomain.SOFTWARE
+    customer_impact: CustomerImpact = CustomerImpact.DEGRADED
+    tags: list[str] = Field(default_factory=list)
     resolution_hints: dict[str, str] = Field(default_factory=dict)
 
 
