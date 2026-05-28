@@ -47,7 +47,7 @@ YAML that controls the deterministic shape of the run — counts, proportions, r
   - `pipeline` — `version`, `run_seed`, and the per-run budget (`max_tokens_per_run`, `max_usd_per_run`, `max_retries_per_artifact`).
   - `agents` — the two LLM buckets (`generator` and `combined_checker`) with `provider`, `model`, `temperature`, `max_tokens`, and `timeout_s`. Every node in the graph routes to one of these buckets.
   - `problem_database` — Phase 1 controls: `count` and `complexity_proportions` (simple / medium / complex), applied with largest-remainder rounding.
-  - `tickets` — Phase 2 controls: `total`, `type_proportions`, `tier_proportions`, `tone_proportions_per_type`, `turns_per_type`, and `assignment_strategy` (`complexity_weighted` or `uniform`).
+  - `tickets` — Phase 2 controls: `total`, `type_proportions`, `tier_proportions`, `tone_proportions_per_type`, `dialogue.turn_cap`, and `assignment_strategy` (`complexity_weighted` or `uniform`). Turn count is **emergent** — the two dialogue agents decide when the conversation is over — so there is no per-type turn target; `dialogue.turn_cap` (default 20) is only a hard safety ceiling that rarely binds.
   - `validation` — whether the combined checker runs after each generation and how its verdict gates retries.
   - `embedding` — opt-in Phase 1 dedup. When `enabled: true`, accepted candidates are embedded via an OpenAI-compatible endpoint (defaults to local Ollama at `http://localhost:11434/v1` with `embeddinggemma:300m`) and rejected if cosine similarity to any already-committed problem in the run meets or exceeds `threshold`. `dim` truncates the model's native vector (Matryoshka); `text_template` selects between `title_summary` and `title_summary_background`.
 - **`config/profiles/*.yaml`** — overlays applied on top of `default.yaml` via `--profile <name>`. Shipped overlays cover model routing (`claude-only`, `claude-cli`, `local-only`, `mixed`) and a small `dev` overlay that shrinks problem/ticket counts for fast iteration.
@@ -67,7 +67,7 @@ The resolved config (default + active profile) is persisted as `runs.config_snap
 
 1. **Phase 1 — Problem Database** — generate `problem_database.count` problems with target complexities driven by `complexity_proportions` (largest-remainder rounding). Each problem flows through a `generate_problem → validate_problem → commit_problem` retry sub-loop.
 2. **Allocator** — `csfd.allocator.build_allocation_plan` produces a fully deterministic plan: every ticket slot's `(problem_id, ticket_type, customer_tier, customer_tone)` is chosen before any LLM call.
-3. **Phase 2 — Resolution per slot** — for each slot, one LLM call produces the standalone incoming request plus the full multi-turn resolution. Same retry shape as Phase 1.
+3. **Phase 2 — Resolution per slot** — for each slot, a turn-based dialogue between two information-asymmetric agents produces the conversation. A customer agent (which sees only the problem's symptoms, impact, and persona) opens with the standalone incoming request; a service agent (which sees the root cause, background, and resolution hint) replies. Turns alternate — one LLM call each — until whichever speaker just spoke flags the conversation done, or a hard `dialogue.turn_cap` is reached. A consistency agent then reviews the full transcript and may pass it, pass it with edits, or fail it (a fail re-rolls the whole conversation within the same retry budget as Phase 1). Conversation length is emergent: simple problems resolve in 2–3 turns, complex ones take more. This costs more LLM calls per slot than a single-shot generator — typically ~4–10 turn calls plus one consistency call.
 
 Three output datasets per run: **`incoming_requests`** (denormalized customer requests), **`resolutions`** (multi-turn conversations), and **`lineage`** (problem → request → resolution traceability). Every LLM call also writes one row to **`agent_traces`** with `prompt_id`, `model_provider`, `model_id`, `latency_ms`, and (for checkers) `verdict` / `verdict_issues_json` — checker traces link to their generator via `parent_trace_id`.
 
@@ -169,15 +169,15 @@ A single `csfd generate` invocation walks the parent graph from top to bottom. E
 
 9. **Build the allocation plan.** Phase 2 starts with `build_allocation_plan`, which is the deterministic core of the system: before any Phase 2 LLM call, `csfd.allocator.build_allocation_plan` reads `tickets.total` plus the type / tier / tone proportions and produces the full list of slots. Each slot is a fixed tuple `(slot_index, problem_id, ticket_type, customer_tier, customer_tone, customer_name)`. The same seed and config always produce the same slot list. This node also pre-records `lineage` rows so each slot is traceable even before its request and resolution exist.
 
-10. **Generate the resolution for a slot.** `generate_resolution` pops the next slot, renders the resolution template against that slot's problem + ticket parameters, and makes a single LLM call that produces both the standalone incoming customer message and the full multi-turn agent/customer conversation. Another `agent_traces` row is written.
+10. **Run the turn-based dialogue for a slot.** `generate_incoming_request` makes the customer's opening LLM call (symptoms + persona only) and seeds turn 1. Then `generate_agent_turn` and `generate_customer_turn` alternate — one LLM call each, each writing an `agent_traces` row — with the customer agent seeing only customer-observable fields and the service agent seeing only root-cause fields. The loop ends when whichever speaker just spoke flags `done`, or when `dialogue.turn_cap` is hit (committed with a `warning:turn_cap_hit` flag).
 
-11. **Validate the resolution.** Same shape as Phase 1: `validate_resolution` runs the combined checker, with its own trace row linked via `parent_trace_id`.
+11. **Validate the conversation.** `validate_conversation` runs the consistency agent over the full transcript, with its own trace row linked via `parent_trace_id`. It returns pass, pass-with-edits (the transcript is rewritten in place and flagged `info:consistency_edited`), or fail.
 
-12. **Retry sub-loop.** Fail + retries left → back to `generate_resolution` with the same slot. Retries exhausted → accept with a quality flag.
+12. **Retry sub-loop.** Fail + retries left → re-roll the whole conversation from `generate_incoming_request`. Retries exhausted → accept with a quality flag.
 
-13. **Commit the resolution.** `commit_resolution` inserts the `incoming_requests` row and the `resolutions` row, then backfills the pre-recorded `lineage` row with their ids. The benchmark "gold tuple" is now complete for this slot.
+13. **Commit the dialogue.** `commit_dialogue` inserts the `incoming_requests` row and the `resolutions` row (with the full turn list and the derived `resolved` flag), then backfills the pre-recorded `lineage` row with their ids. The benchmark "gold tuple" is now complete for this slot.
 
-14. **Outer Phase 2 loop.** If more slots remain in the allocation plan, route back to `generate_resolution`; otherwise Phase 2 exits.
+14. **Outer Phase 2 loop.** If more slots remain in the allocation plan, route back to `generate_incoming_request`; otherwise Phase 2 exits.
 
 15. **`finalize_run` node.** The parent graph aggregates end-of-run statistics — total problems, requests, resolutions, traces, plus type/tier/tone/complexity breakdowns and quality-flag distribution — writes `stats_json` and `completed_at` onto the `runs` row, and marks the run completed.
 
