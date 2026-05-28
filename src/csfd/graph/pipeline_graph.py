@@ -23,7 +23,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
@@ -34,6 +34,7 @@ from csfd.agents.base import Verdict
 from csfd.agents.factory import AgentFactory
 from csfd.models.registry import build_llm
 from csfd.pipeline import (
+    DialogueTurnOutput,
     ProblemBrainstormOutput,
     ResolutionOutput,
     _acompute_run_stats,
@@ -94,6 +95,13 @@ class PipelineState(BaseModel):
     # --- Phase 2 progress ---
     plan_slots: list[_PlanSlot] = Field(default_factory=list)
     slot_index: int = 0
+
+    # --- per-slot dialogue progress (reset in commit_dialogue_node) ---
+    current_dialogue_turns: list[DialogueTurnOutput] = Field(default_factory=list)
+    dialogue_last_speaker: Literal["customer", "agent"] | None = None
+    dialogue_done: bool = False
+    dialogue_end_reason: Literal["customer_done", "agent_done", "cap_hit"] | None = None
+    dialogue_turn_cap: int = 20
 
     # --- per-artifact transient (reused across both phases; reset in commit_*) ---
     retry_attempt: int = 0
