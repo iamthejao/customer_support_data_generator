@@ -229,6 +229,10 @@ def _assign_complexity_weighted(
                 non_empty_pref.append(c)
 
         if non_empty_pref:
+            assert len(non_empty_pref) <= len(_PREF_WEIGHTS), (
+                f"no weights defined for {len(non_empty_pref)} preferred buckets; "
+                f"extend _PREF_WEIGHTS"
+            )
             weights = _PREF_WEIGHTS[len(non_empty_pref)]
             weight_map = {c.value: w for c, w in zip(non_empty_pref, weights, strict=True)}
             split = largest_remainder(weight_map, n)
