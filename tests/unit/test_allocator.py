@@ -248,3 +248,68 @@ def test_missing_tone_config_raises() -> None:
             problems=_problems({ProblemComplexity.SIMPLE: 1}),
             assignment_strategy="complexity_weighted",
         )
+
+
+def test_complexity_weighted_uses_both_preferred_buckets() -> None:
+    # L2 prefers (medium, complex); both populated -> rank weights 0.6/0.4 over 10 slots.
+    problems = _problems({ProblemComplexity.MEDIUM: 5, ProblemComplexity.COMPLEX: 5})
+    plan = build_allocation_plan(
+        total=10,
+        type_proportions={"docs_request": 0.0, "l1": 0.0, "l2": 1.0, "l3": 0.0},
+        tier_proportions={"standard": 1.0},
+        tone_proportions_per_type={
+            "docs_request": {"neutral": 1.0},
+            "l1": {"neutral": 1.0},
+            "l2": {"neutral": 1.0},
+            "l3": {"neutral": 1.0},
+        },
+        problems=problems,
+        assignment_strategy="complexity_weighted",
+    )
+    medium_ids = {p.id for p in problems if p.complexity == ProblemComplexity.MEDIUM}
+    complex_ids = {p.id for p in problems if p.complexity == ProblemComplexity.COMPLEX}
+    l2_ids = [s.problem_id for s in plan.slots]
+    n_medium = sum(1 for pid in l2_ids if pid in medium_ids)
+    n_complex = sum(1 for pid in l2_ids if pid in complex_ids)
+    assert n_medium == 6
+    assert n_complex == 4
+
+
+def test_complexity_weighted_renormalizes_when_one_pref_empty() -> None:
+    # L2 prefers (medium, complex); only complex present -> all slots from complex.
+    problems = _problems({ProblemComplexity.COMPLEX: 4})
+    plan = build_allocation_plan(
+        total=10,
+        type_proportions={"docs_request": 0.0, "l1": 0.0, "l2": 1.0, "l3": 0.0},
+        tier_proportions={"standard": 1.0},
+        tone_proportions_per_type={
+            "docs_request": {"neutral": 1.0},
+            "l1": {"neutral": 1.0},
+            "l2": {"neutral": 1.0},
+            "l3": {"neutral": 1.0},
+        },
+        problems=problems,
+        assignment_strategy="complexity_weighted",
+    )
+    complex_ids = {p.id for p in problems}
+    assert all(s.problem_id in complex_ids for s in plan.slots)
+
+
+def test_complexity_weighted_falls_back_when_all_pref_empty() -> None:
+    # L2 prefers (medium, complex); only simple present -> global fallback to simple.
+    problems = _problems({ProblemComplexity.SIMPLE: 4})
+    plan = build_allocation_plan(
+        total=10,
+        type_proportions={"docs_request": 0.0, "l1": 0.0, "l2": 1.0, "l3": 0.0},
+        tier_proportions={"standard": 1.0},
+        tone_proportions_per_type={
+            "docs_request": {"neutral": 1.0},
+            "l1": {"neutral": 1.0},
+            "l2": {"neutral": 1.0},
+            "l3": {"neutral": 1.0},
+        },
+        problems=problems,
+        assignment_strategy="complexity_weighted",
+    )
+    simple_ids = {p.id for p in problems}
+    assert all(s.problem_id in simple_ids for s in plan.slots)

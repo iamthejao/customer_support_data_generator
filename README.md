@@ -199,8 +199,10 @@ The persistence layer inside graph nodes is `aiosqlite`-backed (see `src/csfd/st
 
 ## Reproducibility
 
+**Reproducibility contract.** Given identical config, `run_seed`, and a fresh database, `csfd` reproduces the **allocation plan and slot-by-slot lineage** plus all provenance stamps — but **not generated text**. Agent temperatures are nonzero and provider models drift, so problem and resolution *content* is never bitwise-reproducible across runs. What is reproducible is the deterministic skeleton: which problem index, ticket type, tier, and tone occupy each slot, and the recorded config/prompt/model/git provenance that lets you trace any example back to its inputs.
+
 Every run stamps:
-- `run_seed` — drives the `uniform` allocator's tiebreaker shuffle; the `complexity_weighted` strategy is reproducible without a seed
+- `run_seed` — drives the `uniform` allocator's tiebreaker shuffle; the `complexity_weighted` strategy splits each ticket type's slots across its non-empty preferred complexity buckets via fixed rank weights, so it is reproducible without a seed
 - `pipeline.version` — semver bumped on schema-breaking changes
 - `git_sha` — captured at run start via `git rev-parse HEAD` (NULL outside a git repo)
 - `config_snapshot_json` — the resolved `problem_database` + `tickets` + `validation` sections
@@ -212,6 +214,8 @@ Determinism guarantee: given identical config and seed, two runs against fresh d
 Pin an exported benchmark to its provenance via `runs.config_snapshot_json` and the per-row `prompt_id` / `model_id` columns in `agent_traces`.
 
 Embedding scores depend on the Ollama model/version and platform: a candidate whose cosine is very close to `embedding.threshold` can flip across Ollama upgrades. The deterministic allocation guarantee (slot-by-slot lineage) is unchanged.
+
+Known limitation — model revisions: `agent_traces.model_id` records the model *name* (e.g. `claude-sonnet-4-6`), not the provider's underlying snapshot/revision. A provider-side model update served under the same name changes outputs without changing the recorded provenance. For stricter provenance, pin an explicit model snapshot identifier in your profile config.
 
 ## Benchmark consumption
 
@@ -285,8 +289,6 @@ Concrete next steps that would meaningfully raise the quality, throughput, or re
 1. **Prompt optimization.** Current agent prompts in the repository are simplistic, mostly used for testing purposes only.
 
 2. **Add creativity / noise agents to diversify generation.** Right now every problem and every resolution is produced by a single generator prompt against the same seed material, which biases output toward the model's mode and produces tickets that feel stylistically homogeneous. A lightweight "noise" agent inserted before the generator — varying customer voice, urgency, partial information, typos, regional phrasing, or back-and-forth ambiguity per slot — would yield datasets that better stress-test routing, RAG retrieval, and agent handling of messy real-world inputs. Determinism is preserved by deriving the noise agent's choices from `(run_seed, slot_index)`.
-
-3. **Turn-based ticket creation.** Right now, the whole conversation is created by a generation agent. This can be improved and made more realistic by creating 2 agents, one mimicking the customer and another mimicking the customer support, that chat in turns. Each agent will have access to partial data, making the "problem discovery" more realistic.
 
 ## License
 
