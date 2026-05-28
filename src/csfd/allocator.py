@@ -171,16 +171,31 @@ def _assign_uniform(
     return out
 
 
+# Rank-decay weights for splitting a ticket type's slots across the
+# non-empty complexity buckets in its preference tuple. Keyed by the number
+# of non-empty preferred buckets. First preferred bucket gets the largest share.
+_PREF_WEIGHTS: dict[int, tuple[float, ...]] = {
+    1: (1.0,),
+    2: (0.6, 0.4),
+    3: (0.5, 0.3, 0.2),
+}
+
+
 def _assign_complexity_weighted(
     *,
     type_counts: Mapping[TicketType, int],
     problems: Sequence[ProblemRef],
 ) -> dict[TicketType, list[str]]:
-    """Assign problems by matching each type's complexity preference.
+    """Assign problems by spreading each type's slots across ALL non-empty
+    preferred complexity buckets, weighted by preference rank.
 
-    For each ticket type, walk its preference tuple in order; from the matching
-    complexity bucket, round-robin problem ids. If preferred buckets are empty,
-    fall back to other complexities (order: simple -> medium -> complex).
+    For each ticket type, take the non-empty buckets named in its preference
+    tuple (in order), split the type's slot count across them via rank-decay
+    weights and largest-remainder rounding, and round-robin problem ids within
+    each bucket. If no preferred bucket is populated, fall back to the first
+    non-empty bucket in global order (simple -> medium -> complex).
+
+    Deterministic with no seed: identical config produces identical assignments.
     """
     buckets: dict[ProblemComplexity, list[str]] = {
         ProblemComplexity.SIMPLE: [],
@@ -196,22 +211,38 @@ def _assign_complexity_weighted(
         ProblemComplexity.COMPLEX,
     )
 
+    def _round_robin(ids: list[str], count: int) -> list[str]:
+        return [ids[i % len(ids)] for i in range(count)] if ids else []
+
     out: dict[TicketType, list[str]] = {}
     for tt, n in type_counts.items():
         pref = TICKET_TYPE_METADATA[tt].complexity_preference
-        ordered: list[str] = []
+
+        # Non-empty preferred buckets, in preference order, de-duplicated.
+        non_empty_pref: list[ProblemComplexity] = []
         seen: set[ProblemComplexity] = set()
-        # Walk preference, then fallback; pick the FIRST non-empty bucket and
-        # round-robin only within it. Only if that bucket is empty try the next.
-        for c in (*pref, *fallback_order):
+        for c in pref:
             if c in seen:
                 continue
             seen.add(c)
             if buckets[c]:
-                ordered = buckets[c]
-                break
-        if not ordered:
-            out[tt] = []
+                non_empty_pref.append(c)
+
+        if non_empty_pref:
+            weights = _PREF_WEIGHTS[len(non_empty_pref)]
+            weight_map = {c.value: w for c, w in zip(non_empty_pref, weights, strict=True)}
+            split = largest_remainder(weight_map, n)
+            ordered: list[str] = []
+            for c in non_empty_pref:
+                ordered.extend(_round_robin(buckets[c], split[c.value]))
+            out[tt] = ordered
             continue
-        out[tt] = [ordered[i % len(ordered)] for i in range(n)]
+
+        # All preferred buckets empty: fall back to first non-empty global bucket.
+        fallback_ids: list[str] = []
+        for c in fallback_order:
+            if buckets[c]:
+                fallback_ids = buckets[c]
+                break
+        out[tt] = _round_robin(fallback_ids, n)
     return out
