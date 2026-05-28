@@ -9,3 +9,4 @@ agents:
 
 embedding:
   enabled: true
+  text_template: title_summary_symptoms_root_cause

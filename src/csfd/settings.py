@@ -73,7 +73,11 @@ class EmbeddingConfig(BaseModel):
     model: str = "embeddinggemma:300m"
     dim: int | None = 768
     threshold: float = 0.85
-    text_template: Literal["title_summary", "title_summary_background"] = "title_summary"
+    text_template: Literal[
+        "title_summary",
+        "title_summary_background",
+        "title_summary_symptoms_root_cause",
+    ] = "title_summary"
     timeout_s: int = 30
 
 
