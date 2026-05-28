@@ -1,39 +1,60 @@
-"""Phase 2 subgraph — plan-driven resolution generation.
+"""Phase 2 subgraph — plan-driven turn-based dialogue generation.
 
-This module defines the LangGraph subgraph that ports
-:func:`csfd.pipeline.generate_resolutions` onto LangGraph. The subgraph first
-builds a deterministic allocation plan (via :func:`csfd.allocator.build_allocation_plan`)
-and pre-records the lineage rows; then, for each slot, flows through a
-generator -> (optional) checker -> commit cycle with bounded retries on
-checker failure. The subgraph shares
+This module defines the LangGraph subgraph that generates one customer-service
+conversation per allocation slot. It first builds a deterministic allocation
+plan (via :func:`csfd.allocator.build_allocation_plan`) and pre-records the
+lineage rows; then, for each slot, it runs a turn-by-turn dialogue between two
+information-asymmetric agents:
+
+* the **customer** agent sees only customer-observable problem fields
+  (symptoms, impact, persona) and the conversation so far;
+* the **service** agent sees only root-cause fields (root cause, background,
+  summary, resolution hint) and the conversation so far.
+
+Turn 1 is the customer's opening message (the standalone incoming request).
+Turns then alternate, starting with the service agent, until whichever speaker
+just spoke flags ``done`` — or a hard ``dialogue.turn_cap`` is reached. A
+consistency agent then reviews the full transcript and may pass it, pass it
+with edits, or fail it (a fail re-rolls the whole conversation within the
+existing retry budget). The subgraph shares
 :class:`csfd.graph.pipeline_graph.PipelineState` with the parent graph and the
 Phase 1 subgraph; no input/output mapping is needed.
 
 Subgraph topology:
 
-    START -> build_allocation_plan -> generate_resolution
-                                          |
-                                          v
-                  _route_after_generate_resolution
-                    /                            \\
-        validate_resolution            _mark_validation_skipped
-                |                                  |
-        _route_after_validate_resolution           |
-        /          |           \\                  |
-      pass       retry       exhausted             |
-        |          |             |                 |
-        |    _bump_retry    _mark_exhausted        |
-        |          |             |                 |
-        |          v             v                 v
-        |   generate_resolution  commit_resolution <-+
-        |                              ^
-        +------------------------------+
-                                       |
+    START -> build_allocation_plan -> generate_incoming_request
+                                              |
+                                              v
+                                     generate_agent_turn <------------+
+                                              |                       |
+                          _route_after_agent_turn                     |
+                          /          |           \\                   |
+                  generate_customer_turn  cap   consistency           |
+                          |          |           |                    |
+            _route_after_customer_turn |          |                   |
+            /        |        \\       |          |                   |
+       agent      cap      consistency |          |                   |
+        (back to generate_agent_turn) -+          |                   |
+                             |                     |                   |
+                        _mark_cap_hit -> _route_consistency_or_skip <--+
+                                              |
+                          _route_validation_enabled
+                            /                    \\
+                  validate_conversation     _mark_validation_skipped
+                            |                        |
+            _route_after_validate_conversation       |
+            /         |            \\                |
+          pass      retry       exhausted            |
+            |         |             |                |
+            |   _bump_retry   _mark_exhausted        |
+            |  (back to gen)        |                |
+            +-----------------> commit_dialogue <-----+
+                                    |
                        _route_after_commit_resolution
                               /                  \\
                             next                 done
                               |                    \\
-                       generate_resolution          END
+                  generate_incoming_request          END
 """
 
 from __future__ import annotations
@@ -50,7 +71,14 @@ from csfd.agents.factory import AgentFactory
 from csfd.agents.tracing import ParentLink, TracingAdapter
 from csfd.allocator import ProblemRef, build_allocation_plan
 from csfd.graph.pipeline_graph import PipelineState, _PlanSlot
-from csfd.pipeline import ResolutionOutput
+from csfd.pipeline import (
+    ConsistencyVerdict,
+    DialogueTurnOutput,
+    IncomingRequestOutput,
+    ResolutionOutput,
+    _apply_consistency_edits,
+    _assemble_resolution,
+)
 from csfd.settings import AppSettings
 from csfd.storage.db import Database
 from csfd.storage.db_async import AsyncDatabase
@@ -63,6 +91,52 @@ from csfd.storage.repository import (
     ResolutionRepo,
 )
 from csfd.ticket_types.definitions import ProblemComplexity
+
+# --------------------------------------------------------------------------- #
+# Input builders (enforce information asymmetry at the prompt boundary)
+# --------------------------------------------------------------------------- #
+
+
+def _render_history(turns: list[DialogueTurnOutput]) -> list[dict[str, str]]:
+    """Render accumulated turns into the simple {speaker, content} dicts prompts expect."""
+    return [{"speaker": t.speaker, "content": t.content} for t in turns]
+
+
+def _customer_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
+    """Customer-view inputs: symptoms + impact + persona only. No root cause."""
+    problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
+    return {
+        "company_name": state.company.name,
+        "ticket_type": slot.ticket_type.value,
+        "customer_name": f"Customer-{slot.tier}-{slot.index:04d}",
+        "customer_tier": slot.tier,
+        "customer_tone": slot.tone,
+        "symptoms": problem.symptoms,
+        "customer_impact": problem.customer_impact,
+        "category": problem.category,
+        "turn_cap": state.dialogue_turn_cap,
+    }
+
+
+def _agent_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
+    """Service-view inputs: root cause + diagnostic context. No symptoms list, no tone."""
+    problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
+    return {
+        "company_name": state.company.name,
+        "ticket_type": slot.ticket_type.value,
+        "agent_name": f"Agent-{slot.ticket_type.value}-{slot.index:04d}",
+        "problem": {
+            "title": problem.title,
+            "summary": problem.summary,
+            "background": problem.background,
+            "category": problem.category,
+            "fault_domain": problem.fault_domain,
+            "root_cause": problem.root_cause,
+            "resolution_hint": problem.resolution_hints.get(slot.ticket_type.value, ""),
+        },
+        "turn_cap": state.dialogue_turn_cap,
+    }
+
 
 # --------------------------------------------------------------------------- #
 # Nodes
@@ -119,10 +193,14 @@ async def build_allocation_plan_node(
         )
         for s in plan.slots
     ]
-    return {"plan_slots": pydantic_slots, "slot_index": 0}
+    return {
+        "plan_slots": pydantic_slots,
+        "slot_index": 0,
+        "dialogue_turn_cap": settings.tickets.dialogue.turn_cap,
+    }
 
 
-async def generate_resolution_node(
+async def generate_incoming_request_node(
     state: PipelineState,
     *,
     factory: AgentFactory,
@@ -130,68 +208,106 @@ async def generate_resolution_node(
     adb: AsyncDatabase,
     settings: AppSettings,
 ) -> dict[str, Any]:
-    """Invoke the resolution generator for the current slot."""
+    """LLM call: customer's opening message. Seeds turn 1 (customer)."""
     slot = state.plan_slots[state.slot_index]
     ticket_uid = f"{state.run_id}:{slot.index:06d}"
-
-    problem_by_id = {p.id: p for p in state.problems_committed}
-    problem = problem_by_id[slot.problem_id]
-    customer_name = f"Customer-{slot.tier}-{slot.index:04d}"
-    agent_name = f"Agent-{slot.ticket_type.value}-{slot.index:04d}"
-    target_turns = settings.tickets.turns_per_type[slot.ticket_type.value]
-
-    inputs: dict[str, Any] = {
-        "company_name": state.company.name,
-        "ticket_type": slot.ticket_type.value,
-        "customer_tier": slot.tier,
-        "customer_tone": slot.tone,
-        "customer_name": customer_name,
-        "agent_name": agent_name,
-        "target_turn_count": target_turns,
-        "problem": {
-            "id": problem.id,
-            "title": problem.title,
-            "summary": problem.summary,
-            "background": problem.background,
-            "category": problem.category,
-            "complexity": problem.complexity,
-            "resolution_hint": problem.resolution_hints.get(slot.ticket_type.value, ""),
-        },
-    }
+    inputs = _customer_inputs(state, slot)
 
     link = ParentLink()
     generator = factory.build_generator(
-        name="resolution_generator",
-        prompt_name="phase2.resolution_generator",
-        output_schema_factory=lambda: ResolutionOutput,
+        name="incoming_request_generator",
+        prompt_name="phase2.incoming_request",
+        output_schema_factory=lambda: IncomingRequestOutput,
     )
-    traced_gen = TracingAdapter(
+    traced = TracingAdapter(
         inner=generator,
         db=db,
         adb=adb,
         run_id=state.run_id,
-        node_name="resolution_generator",
+        node_name="incoming_request_generator",
         artifact_type="resolution",
         artifact_id=ticket_uid,
         role="generator",
         parent_link=link,
     )
-    # Feed the prior checker verdict back so the prompt's "prior attempt
-    # failed validation" block has actual issues to point at on retry.
-    prior_verdicts = [state.last_verdict] if state.last_verdict is not None else []
-    result = await traced_gen.invoke(
-        AgentContext(
-            inputs=inputs, retry_attempt=state.retry_attempt, prior_verdicts=prior_verdicts
-        )
-    )
-    assert isinstance(result, ResolutionOutput)
+    result = await traced.invoke(AgentContext(inputs=inputs, retry_attempt=state.retry_attempt))
+    assert isinstance(result, IncomingRequestOutput)
+    turn0 = DialogueTurnOutput(speaker="customer", content=result.body, done=False)
     return {
-        "current_resolution_draft": result,
+        "current_resolution_draft": ResolutionOutput(subject=result.subject, body=result.body),
+        "current_dialogue_turns": [turn0],
+        "dialogue_last_speaker": "customer",
+        "dialogue_done": False,
+        "dialogue_end_reason": None,
         "last_generator_trace_id": link.last_generator_trace_id,
     }
 
 
-async def validate_resolution_node(
+async def _generate_turn(
+    state: PipelineState,
+    *,
+    factory: AgentFactory,
+    db: Database,
+    adb: AsyncDatabase,
+    speaker: Literal["customer", "agent"],
+) -> dict[str, Any]:
+    """Shared body for the customer / agent turn nodes: one LLM call, one appended turn."""
+    slot = state.plan_slots[state.slot_index]
+    ticket_uid = f"{state.run_id}:{slot.index:06d}"
+    if speaker == "customer":
+        node_name, prompt_name = "customer_turn_generator", "phase2.customer_turn"
+        inputs = _customer_inputs(state, slot)
+    else:
+        node_name, prompt_name = "agent_turn_generator", "phase2.agent_turn"
+        inputs = _agent_inputs(state, slot)
+    inputs["conversation_so_far"] = _render_history(state.current_dialogue_turns)
+    inputs["turn_index"] = len(state.current_dialogue_turns) + 1
+    # On a re-roll, surface the prior consistency issues to the agent so it can
+    # avoid repeating them. Only the agent turn receives them (it drives diagnosis).
+    prior_issues = (
+        [i.explanation for i in state.last_verdict.issues]
+        if (speaker == "agent" and state.last_verdict is not None and not state.last_verdict.passed)
+        else []
+    )
+
+    link = ParentLink()
+    generator = factory.build_generator(
+        name=node_name,
+        prompt_name=prompt_name,
+        output_schema_factory=lambda: DialogueTurnOutput,
+    )
+    traced = TracingAdapter(
+        inner=generator,
+        db=db,
+        adb=adb,
+        run_id=state.run_id,
+        node_name=node_name,
+        artifact_type="resolution",
+        artifact_id=ticket_uid,
+        role="generator",
+        parent_link=link,
+    )
+    ctx = AgentContext(
+        inputs={**inputs, "prior_issues": prior_issues}, retry_attempt=state.retry_attempt
+    )
+    result = await traced.invoke(ctx)
+    assert isinstance(result, DialogueTurnOutput)
+    # Force the speaker to match this node's role; the LLM may fill it but we own it.
+    result = result.model_copy(update={"speaker": speaker})
+    turns = [*state.current_dialogue_turns, result]
+    end_reason = None
+    if result.done:
+        end_reason = "customer_done" if speaker == "customer" else "agent_done"
+    return {
+        "current_dialogue_turns": turns,
+        "dialogue_last_speaker": speaker,
+        "dialogue_done": result.done,
+        "dialogue_end_reason": end_reason,
+        "last_generator_trace_id": link.last_generator_trace_id,
+    }
+
+
+async def generate_agent_turn_node(
     state: PipelineState,
     *,
     factory: AgentFactory,
@@ -199,77 +315,103 @@ async def validate_resolution_node(
     adb: AsyncDatabase,
     settings: AppSettings,
 ) -> dict[str, Any]:
-    """Run the combined resolution checker against the current draft."""
+    """LLM call: one service-agent turn."""
+    return await _generate_turn(state, factory=factory, db=db, adb=adb, speaker="agent")
+
+
+async def generate_customer_turn_node(
+    state: PipelineState,
+    *,
+    factory: AgentFactory,
+    db: Database,
+    adb: AsyncDatabase,
+    settings: AppSettings,
+) -> dict[str, Any]:
+    """LLM call: one customer turn."""
+    return await _generate_turn(state, factory=factory, db=db, adb=adb, speaker="customer")
+
+
+async def validate_conversation_node(
+    state: PipelineState,
+    *,
+    factory: AgentFactory,
+    db: Database,
+    adb: AsyncDatabase,
+    settings: AppSettings,
+) -> dict[str, Any]:
+    """LLM call: consistency review of the full transcript; may return edits."""
     slot = state.plan_slots[state.slot_index]
     ticket_uid = f"{state.run_id}:{slot.index:06d}"
     assert state.current_resolution_draft is not None
+    end_reason = state.dialogue_end_reason or "agent_done"
+    draft = _assemble_resolution(
+        subject=state.current_resolution_draft.subject,
+        body=state.current_resolution_draft.body,
+        turns=state.current_dialogue_turns,
+        end_reason=end_reason,
+    )
 
-    problem_by_id = {p.id: p for p in state.problems_committed}
-    problem = problem_by_id[slot.problem_id]
-    customer_name = f"Customer-{slot.tier}-{slot.index:04d}"
-    agent_name = f"Agent-{slot.ticket_type.value}-{slot.index:04d}"
-    target_turns = settings.tickets.turns_per_type[slot.ticket_type.value]
-
+    problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
     inputs: dict[str, Any] = {
         "company_name": state.company.name,
-        "ticket_type": slot.ticket_type.value,
-        "customer_tier": slot.tier,
         "customer_tone": slot.tone,
-        "customer_name": customer_name,
-        "agent_name": agent_name,
-        "target_turn_count": target_turns,
         "problem": {
-            "id": problem.id,
             "title": problem.title,
-            "summary": problem.summary,
-            "background": problem.background,
-            "category": problem.category,
             "complexity": problem.complexity,
+            "symptoms": problem.symptoms,
+            "root_cause": problem.root_cause,
             "resolution_hint": problem.resolution_hints.get(slot.ticket_type.value, ""),
         },
-        "candidate": state.current_resolution_draft.model_dump(),
+        "candidate": draft.model_dump(),
     }
 
     link = ParentLink(last_generator_trace_id=state.last_generator_trace_id)
-    checker = factory.build_checker(
-        name="combined_resolution_check",
-        prompt_name="phase2.resolution_combined_check",
+    checker = factory.build_generator(
+        name="conversation_consistency_check",
+        prompt_name="phase2.conversation_consistency_check",
+        output_schema_factory=lambda: ConsistencyVerdict,
     )
-    traced_check = TracingAdapter(
+    traced = TracingAdapter(
         inner=checker,
         db=db,
         adb=adb,
         run_id=state.run_id,
-        node_name="combined_resolution_check",
+        node_name="conversation_consistency_check",
         artifact_type="resolution",
         artifact_id=ticket_uid,
         role="checker",
         parent_link=link,
     )
-    verdict = await traced_check.invoke(
-        AgentContext(inputs=inputs, retry_attempt=state.retry_attempt, prior_verdicts=[])
-    )
-    assert isinstance(verdict, Verdict)
+    verdict = await traced.invoke(AgentContext(inputs=inputs, retry_attempt=state.retry_attempt))
+    assert isinstance(verdict, ConsistencyVerdict)
+
+    passed = verdict.status in ("pass", "pass_with_edits")
+    edited = verdict.status == "pass_with_edits"
+    final_draft = _apply_consistency_edits(draft, verdict) if passed else draft
+    quality_flag = state.last_quality_flag
+    if edited:
+        quality_flag = "info:consistency_edited"
     return {
-        "last_verdict": verdict,
-        "last_quality_flag": None if verdict.passed else state.last_quality_flag,
+        "current_resolution_draft": final_draft,
+        "current_dialogue_turns": final_draft.turns,
+        "last_verdict": Verdict(checker="conversation_consistency_check", passed=passed, issues=[]),
+        "last_quality_flag": quality_flag,
     }
 
 
-async def commit_resolution_node(
+async def commit_dialogue_node(
     state: PipelineState,
     *,
     db: Database,
     adb: AsyncDatabase,
 ) -> dict[str, Any]:
-    """Persist incoming request + resolution and backfill the lineage row."""
+    """Persist incoming request + resolution, backfill lineage, reset per-slot state."""
     slot = state.plan_slots[state.slot_index]
     ticket_uid = f"{state.run_id}:{slot.index:06d}"
     assert state.current_resolution_draft is not None
     draft = state.current_resolution_draft
 
-    problem_by_id = {p.id: p for p in state.problems_committed}
-    problem = problem_by_id[slot.problem_id]
+    problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
     customer_name = f"Customer-{slot.tier}-{slot.index:04d}"
 
     ir_id = await IncomingRequestRepo(db).acreate(
@@ -312,6 +454,10 @@ async def commit_resolution_node(
         "slot_index": state.slot_index + 1,
         "retry_attempt": 0,
         "current_resolution_draft": None,
+        "current_dialogue_turns": [],
+        "dialogue_last_speaker": None,
+        "dialogue_done": False,
+        "dialogue_end_reason": None,
         "last_verdict": None,
         "last_quality_flag": None,
         "last_generator_trace_id": None,
@@ -319,12 +465,12 @@ async def commit_resolution_node(
 
 
 # --------------------------------------------------------------------------- #
-# Small helper nodes (retry / quality-flag bookkeeping)
+# Small helper nodes (retry / quality-flag / convergence bookkeeping)
 # --------------------------------------------------------------------------- #
 
 
 async def _bump_retry_node(state: PipelineState) -> dict[str, Any]:
-    """Increment the per-artifact retry counter before re-entering generation."""
+    """Increment the per-artifact retry counter before re-rolling the conversation."""
     return {"retry_attempt": state.retry_attempt + 1}
 
 
@@ -338,6 +484,19 @@ async def _mark_validation_skipped_node(state: PipelineState) -> dict[str, Any]:
     return {"last_quality_flag": "warning:validation_skipped"}
 
 
+async def _mark_cap_hit_node(state: PipelineState) -> dict[str, Any]:
+    """Stamp the turn-cap warning and pin the end reason when the cap is reached."""
+    return {
+        "dialogue_end_reason": "cap_hit",
+        "last_quality_flag": "warning:turn_cap_hit",
+    }
+
+
+async def _converge_node(state: PipelineState) -> dict[str, Any]:
+    """No-op join point after a conversation ends (done or cap) before validation routing."""
+    return {}
+
+
 # --------------------------------------------------------------------------- #
 # Routers
 # --------------------------------------------------------------------------- #
@@ -348,14 +507,30 @@ def _route_after_build_allocation_plan(state: PipelineState) -> Literal["generat
     return "generate" if state.plan_slots else "done"
 
 
-def _route_after_generate_resolution(state: PipelineState) -> Literal["validate", "commit"]:
-    return "validate" if state.validation_enabled else "commit"
+def _route_after_agent_turn(state: PipelineState) -> Literal["customer", "consistency", "cap"]:
+    if state.dialogue_done:
+        return "consistency"
+    if len(state.current_dialogue_turns) >= state.dialogue_turn_cap:
+        return "cap"
+    return "customer"
 
 
-def _route_after_validate_resolution(
+def _route_after_customer_turn(state: PipelineState) -> Literal["agent", "consistency", "cap"]:
+    if state.dialogue_done:
+        return "consistency"
+    if len(state.current_dialogue_turns) >= state.dialogue_turn_cap:
+        return "cap"
+    return "agent"
+
+
+def _route_validation_enabled(state: PipelineState) -> Literal["validate", "skip"]:
+    return "validate" if state.validation_enabled else "skip"
+
+
+def _route_after_validate_conversation(
     state: PipelineState,
 ) -> Literal["pass", "retry", "exhausted"]:
-    assert state.last_verdict is not None, "validate_resolution_node must set last_verdict"
+    assert state.last_verdict is not None, "validate_conversation_node must set last_verdict"
     if state.last_verdict.passed:
         return "pass"
     if state.retry_attempt >= state.max_retries:
@@ -379,13 +554,13 @@ def build_phase2_subgraph(
     settings: AppSettings,
     adb: AsyncDatabase | None = None,
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
-    """Compile the Phase 2 (resolution generation) subgraph.
+    """Compile the Phase 2 (turn-based dialogue) subgraph.
 
     Returns a graph that, given a ``PipelineState`` with ``problems_committed``
     populated by Phase 1, builds a deterministic allocation plan and generates
-    one resolution per slot, persisting incoming requests, resolutions, and
-    backfilling pre-recorded lineage rows. No checkpointer is attached here —
-    the parent graph owns checkpoint persistence.
+    one turn-based conversation per slot, persisting incoming requests,
+    resolutions, and backfilling pre-recorded lineage rows. No checkpointer is
+    attached here — the parent graph owns checkpoint persistence.
     """
     adb = adb if adb is not None else AsyncDatabase(db.path)
     g: StateGraph[PipelineState, Any, PipelineState, PipelineState] = StateGraph(PipelineState)
@@ -394,54 +569,75 @@ def build_phase2_subgraph(
         partial(build_allocation_plan_node, db=db, adb=adb, settings=settings),
     )
     g.add_node(
-        "generate_resolution",
-        partial(generate_resolution_node, factory=factory, db=db, adb=adb, settings=settings),
+        "generate_incoming_request",
+        partial(generate_incoming_request_node, factory=factory, db=db, adb=adb, settings=settings),
     )
     g.add_node(
-        "validate_resolution",
-        partial(validate_resolution_node, factory=factory, db=db, adb=adb, settings=settings),
+        "generate_agent_turn",
+        partial(generate_agent_turn_node, factory=factory, db=db, adb=adb, settings=settings),
     )
-    g.add_node("commit_resolution", partial(commit_resolution_node, db=db, adb=adb))
+    g.add_node(
+        "generate_customer_turn",
+        partial(generate_customer_turn_node, factory=factory, db=db, adb=adb, settings=settings),
+    )
+    g.add_node(
+        "validate_conversation",
+        partial(validate_conversation_node, factory=factory, db=db, adb=adb, settings=settings),
+    )
+    g.add_node("commit_dialogue", partial(commit_dialogue_node, db=db, adb=adb))
     g.add_node("_bump_retry", _bump_retry_node)
     g.add_node("_mark_exhausted", _mark_exhausted_node)
     g.add_node("_mark_validation_skipped", _mark_validation_skipped_node)
+    g.add_node("_mark_cap_hit", _mark_cap_hit_node)
+    g.add_node("_route_consistency_or_skip", _converge_node)
 
     g.add_edge(START, "build_allocation_plan")
     g.add_conditional_edges(
         "build_allocation_plan",
         _route_after_build_allocation_plan,
+        {"generate": "generate_incoming_request", "done": END},
+    )
+    g.add_edge("generate_incoming_request", "generate_agent_turn")
+    g.add_conditional_edges(
+        "generate_agent_turn",
+        _route_after_agent_turn,
         {
-            "generate": "generate_resolution",
-            "done": END,
+            "customer": "generate_customer_turn",
+            "consistency": "_route_consistency_or_skip",
+            "cap": "_mark_cap_hit",
         },
     )
     g.add_conditional_edges(
-        "generate_resolution",
-        _route_after_generate_resolution,
+        "generate_customer_turn",
+        _route_after_customer_turn,
         {
-            "validate": "validate_resolution",
-            "commit": "_mark_validation_skipped",
+            "agent": "generate_agent_turn",
+            "consistency": "_route_consistency_or_skip",
+            "cap": "_mark_cap_hit",
         },
     )
-    g.add_edge("_mark_validation_skipped", "commit_resolution")
+    g.add_edge("_mark_cap_hit", "_route_consistency_or_skip")
     g.add_conditional_edges(
-        "validate_resolution",
-        _route_after_validate_resolution,
+        "_route_consistency_or_skip",
+        _route_validation_enabled,
+        {"validate": "validate_conversation", "skip": "_mark_validation_skipped"},
+    )
+    g.add_edge("_mark_validation_skipped", "commit_dialogue")
+    g.add_conditional_edges(
+        "validate_conversation",
+        _route_after_validate_conversation,
         {
-            "pass": "commit_resolution",
+            "pass": "commit_dialogue",
             "retry": "_bump_retry",
             "exhausted": "_mark_exhausted",
         },
     )
-    g.add_edge("_bump_retry", "generate_resolution")
-    g.add_edge("_mark_exhausted", "commit_resolution")
+    g.add_edge("_bump_retry", "generate_incoming_request")
+    g.add_edge("_mark_exhausted", "commit_dialogue")
     g.add_conditional_edges(
-        "commit_resolution",
+        "commit_dialogue",
         _route_after_commit_resolution,
-        {
-            "next": "generate_resolution",
-            "done": END,
-        },
+        {"next": "generate_incoming_request", "done": END},
     )
 
     return g.compile()

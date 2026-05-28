@@ -35,24 +35,6 @@ def _base_problem_inputs(**overrides: object) -> dict[str, object]:
     return base
 
 
-def _base_resolution_inputs(**overrides: object) -> dict[str, object]:
-    base: dict[str, object] = {
-        "ticket_type": "l1",
-        "customer_tier": "standard",
-        "customer_tone": "neutral",
-        "target_turn_count": 3,
-        "customer_name": "Alice",
-        "agent_name": "Bob",
-        "problem": {
-            "title": "Chiller intermittently shuts off",
-            "summary": "Unit power-cycles every 20 minutes.",
-        },
-        "resolution_hint": "Check ambient temperature sensor.",
-    }
-    base.update(overrides)
-    return base
-
-
 # ---------- Phase 1: problem_brainstorm_v2 ----------
 
 
@@ -101,103 +83,113 @@ def test_problem_checker_rule_ids_match_generator(registry: PromptRegistry) -> N
         assert rid in rendered, f"checker missing rule id {rid}"
 
 
-# ---------- Phase 2: resolution_generator ----------
+# ---------- Phase 2: turn-based dialogue prompts ----------
 
 
-@pytest.mark.parametrize(
-    "ticket_type,marker",
-    [
-        ("docs_request", "documentation pointer"),
-        ("l1", "first-line"),
-        ("l2", "methodical troubleshooting"),
-        ("l3", "hypothesis-driven"),
-    ],
-)
-def test_resolution_generator_ticket_type_branches(
-    registry: PromptRegistry, ticket_type: str, marker: str
-) -> None:
-    handle = registry.get("phase2.resolution_generator")
-    rendered = handle.template.render(inputs=_base_resolution_inputs(ticket_type=ticket_type))
-    assert marker in rendered
+def test_incoming_request_renders_symptoms_only(registry: PromptRegistry) -> None:
+    handle = registry.get("phase2.incoming_request")
+    rendered = handle.template.render(
+        inputs={
+            "company_name": "CoolTherm",
+            "customer_name": "Alice",
+            "customer_tier": "standard",
+            "customer_tone": "neutral",
+            "ticket_type": "l1",
+            "category": "cooling",
+            "symptoms": ["unit power-cycles every 20 minutes"],
+            "customer_impact": "degraded",
+        }
+    )
+    assert "unit power-cycles every 20 minutes" in rendered
 
 
-@pytest.mark.parametrize(
-    "tier,marker",
-    [
-        ("standard", "standard entitlements"),
-        ("premium", "premium entitlements"),
-        ("enterprise", "enterprise entitlements"),
-    ],
-)
-def test_resolution_generator_tier_branches(
-    registry: PromptRegistry, tier: str, marker: str
-) -> None:
-    handle = registry.get("phase2.resolution_generator")
-    rendered = handle.template.render(inputs=_base_resolution_inputs(customer_tier=tier))
-    assert marker in rendered
+def test_customer_turn_renders_history(registry: PromptRegistry) -> None:
+    handle = registry.get("phase2.customer_turn")
+    rendered = handle.template.render(
+        inputs={
+            "company_name": "CoolTherm",
+            "customer_tone": "frustrated",
+            "symptoms": ["fan rattles"],
+            "customer_impact": "degraded",
+            "conversation_so_far": [{"speaker": "agent", "content": "Can you describe the noise?"}],
+            "turn_index": 3,
+            "turn_cap": 20,
+        }
+    )
+    assert "Can you describe the noise?" in rendered
 
 
-@pytest.mark.parametrize(
-    "tone,marker",
-    [
-        ("neutral", "matter-of-fact"),
-        ("polite", "courteous"),
-        ("frustrated", "visibly frustrated"),
-        ("urgent", "time pressure"),
-    ],
-)
-def test_resolution_generator_tone_branches(
-    registry: PromptRegistry, tone: str, marker: str
-) -> None:
-    handle = registry.get("phase2.resolution_generator")
-    rendered = handle.template.render(inputs=_base_resolution_inputs(customer_tone=tone))
-    assert marker in rendered
+def test_agent_turn_renders_root_cause(registry: PromptRegistry) -> None:
+    handle = registry.get("phase2.agent_turn")
+    rendered = handle.template.render(
+        inputs={
+            "company_name": "CoolTherm",
+            "agent_name": "Bob",
+            "ticket_type": "l2",
+            "problem": {
+                "title": "Brownout",
+                "summary": "PSU brownout",
+                "background": "loose connector",
+                "category": "power",
+                "fault_domain": "hardware",
+                "root_cause": ["loose PSU connector"],
+                "resolution_hint": "reseat the connector",
+            },
+            "conversation_so_far": [{"speaker": "customer", "content": "It keeps restarting."}],
+            "turn_index": 2,
+            "turn_cap": 20,
+        },
+        prior_issues=[],
+    )
+    assert "loose PSU connector" in rendered
 
 
-def test_resolution_generator_unknown_value_falls_through(
-    registry: PromptRegistry,
-) -> None:
-    """Unknown tone must trigger the fallthrough branch, not blow up."""
-    handle = registry.get("phase2.resolution_generator")
-    rendered = handle.template.render(inputs=_base_resolution_inputs(customer_tone="sardonic"))
-    assert "sardonic" in rendered
-    assert "match the named tone" in rendered
+def test_agent_turn_renders_prior_issues_on_retry(registry: PromptRegistry) -> None:
+    handle = registry.get("phase2.agent_turn")
+    rendered = handle.template.render(
+        inputs={
+            "company_name": "CoolTherm",
+            "agent_name": "Bob",
+            "ticket_type": "l1",
+            "problem": {
+                "title": "t",
+                "summary": "s",
+                "background": "b",
+                "category": "c",
+                "fault_domain": "software",
+                "root_cause": ["x"],
+                "resolution_hint": "y",
+            },
+            "conversation_so_far": [],
+            "turn_index": 2,
+            "turn_cap": 20,
+        },
+        prior_issues=["customer leaked root cause"],
+    )
+    assert "customer leaked root cause" in rendered
 
 
-def test_resolution_generator_includes_rule_ids(registry: PromptRegistry) -> None:
-    handle = registry.get("phase2.resolution_generator")
-    rendered = handle.template.render(inputs=_base_resolution_inputs())
-    for rid in (
-        "turn_count",
-        "alternation",
-        "first_turn_parity",
-        "persona_match",
-        "tier_tone_consistency",
-        "on_topic_resolution",
-        "naming",
-        "length_band",
-        "agent_overreach",
-    ):
-        assert rid in rendered, f"generator missing rule id {rid}"
-
-
-# ---------- Phase 2: resolution_combined_check ----------
-
-
-def test_resolution_checker_rule_ids_match_generator(
-    registry: PromptRegistry,
-) -> None:
-    handle = registry.get("phase2.resolution_combined_check")
-    rendered = handle.template.render(inputs=_base_resolution_inputs())
-    for rid in (
-        "turn_count",
-        "alternation",
-        "first_turn_parity",
-        "persona_match",
-        "tier_tone_consistency",
-        "on_topic_resolution",
-        "naming",
-        "length_band",
-        "agent_overreach",
-    ):
-        assert rid in rendered, f"checker missing rule id {rid}"
+def test_consistency_check_renders_complexity(registry: PromptRegistry) -> None:
+    handle = registry.get("phase2.conversation_consistency_check")
+    rendered = handle.template.render(
+        inputs={
+            "company_name": "CoolTherm",
+            "customer_tone": "neutral",
+            "problem": {
+                "title": "T",
+                "complexity": "simple",
+                "symptoms": ["x"],
+                "root_cause": ["y"],
+                "resolution_hint": "z",
+            },
+            "candidate": {
+                "subject": "s",
+                "body": "b",
+                "end_reason": "agent_done",
+                "turns": [
+                    {"speaker": "customer", "content": "b", "done": False, "done_reason": None}
+                ],
+            },
+        }
+    )
+    assert "simple" in rendered

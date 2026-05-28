@@ -48,11 +48,15 @@ class ProblemDatabaseConfig(BaseModel):
     )
 
 
+class DialogueConfig(BaseModel):
+    turn_cap: int = 20
+
+
 class TicketsConfig(BaseModel):
     total: int = 100
     type_proportions: dict[str, float]
     assignment_strategy: Literal["uniform", "complexity_weighted"] = "complexity_weighted"
-    turns_per_type: dict[str, int]
+    dialogue: DialogueConfig = Field(default_factory=DialogueConfig)
     tier_proportions: dict[str, float]
     tone_proportions_per_type: dict[str, dict[str, float]]
 

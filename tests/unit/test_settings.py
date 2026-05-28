@@ -44,7 +44,7 @@ _MINIMAL_DEFAULT = dedent(
       total: 42
       type_proportions: {l1: 1.0}
       assignment_strategy: uniform
-      turns_per_type: {l1: 2}
+      dialogue: {turn_cap: 12}
       tier_proportions: {standard: 1.0}
       tone_proportions_per_type:
         l1: {neutral: 1.0}
@@ -200,7 +200,7 @@ def test_real_default_yaml_loads_and_satisfies_structural_invariants() -> None:
     assert s.pipeline.version
     assert "generator" in s.agents
     assert s.tickets.type_proportions
-    assert s.tickets.turns_per_type
+    assert s.tickets.dialogue.turn_cap > 0
     assert s.tickets.tier_proportions
 
     # Proportions are well-formed (sum to ~1.0).
@@ -212,7 +212,6 @@ def test_real_default_yaml_loads_and_satisfies_structural_invariants() -> None:
 
     # Every ticket type referenced in type_proportions has matching detail entries.
     types = set(s.tickets.type_proportions)
-    assert types <= set(s.tickets.turns_per_type)
     assert types <= set(s.tickets.tone_proportions_per_type)
 
 

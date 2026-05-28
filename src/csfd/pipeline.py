@@ -89,15 +89,6 @@ class ConsistencyVerdict(BaseModel):
     edited_body: str | None = None
 
 
-# Backward-compat alias — to be removed once Task 10 updates the integration tests.
-class ResolutionTurnOutput(BaseModel):
-    """Deprecated: replaced by DialogueTurnOutput. Retained for import compat."""
-
-    speaker: Literal["customer", "agent"]
-    name: str = ""
-    content: str
-
-
 RESOLVED_DONE_REASONS = frozenset({"resolved", "customer_satisfied", "issue_fixed", "closed"})
 
 

@@ -33,6 +33,7 @@ from csfd.settings import (
     AgentLLMConfig,
     AppSettings,
     BudgetConfig,
+    DialogueConfig,
     EmbeddingConfig,
     ObservabilityConfig,
     PipelineConfig,
@@ -75,7 +76,7 @@ def _build_stub_settings() -> AppSettings:
             total=1,
             type_proportions={"docs_request": 1.0, "l1": 0.0, "l2": 0.0, "l3": 0.0},
             assignment_strategy="complexity_weighted",
-            turns_per_type={"docs_request": 2, "l1": 3, "l2": 5, "l3": 7},
+            dialogue=DialogueConfig(turn_cap=20),
             tier_proportions={"standard": 1.0},
             tone_proportions_per_type={
                 "docs_request": {"neutral": 1.0},
@@ -102,8 +103,10 @@ def _build_stub_factory() -> AgentFactory:
     reg._handles = {
         "phase1.problem_brainstorm_v2": handle,
         "phase1.problem_combined_check": handle,
-        "phase2.resolution_generator": handle,
-        "phase2.resolution_combined_check": handle,
+        "phase2.incoming_request": handle,
+        "phase2.customer_turn": handle,
+        "phase2.agent_turn": handle,
+        "phase2.conversation_consistency_check": handle,
     }
     fake = FakeChatModel(structured={})
 

@@ -38,3 +38,14 @@ def test_factory_builds_generator_with_bound_llm_and_prompt(tmp_path: Path) -> N
     assert gen.name == "problem_brainstorm"
     assert isinstance(gen.prompt, PromptHandle)
     assert gen.prompt.name == "phase1.problem_generator"
+
+
+def test_role_fallback_routes_new_dialogue_nodes() -> None:
+    from csfd.agents.factory import _ROLE_FALLBACK
+
+    assert _ROLE_FALLBACK["incoming_request_generator"] == "generator"
+    assert _ROLE_FALLBACK["customer_turn_generator"] == "generator"
+    assert _ROLE_FALLBACK["agent_turn_generator"] == "generator"
+    assert _ROLE_FALLBACK["conversation_consistency_check"] == "combined_checker"
+    assert "resolution_generator" not in _ROLE_FALLBACK
+    assert "combined_resolution_check" not in _ROLE_FALLBACK

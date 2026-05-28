@@ -19,9 +19,9 @@ from csfd.agents.base import Issue, Verdict
 from csfd.agents.factory import AgentFactory
 from csfd.models.fake import FakeChatModel
 from csfd.pipeline import (
+    DialogueTurnOutput,
+    IncomingRequestOutput,
     ProblemBrainstormOutput,
-    ResolutionOutput,
-    ResolutionTurnOutput,
     run_pipeline,
 )
 from csfd.prompts.registry import PromptRegistry
@@ -31,6 +31,7 @@ from csfd.settings import (
     AgentLLMConfig,
     AppSettings,
     BudgetConfig,
+    DialogueConfig,
     ObservabilityConfig,
     PipelineConfig,
     ProblemDatabaseConfig,
@@ -67,23 +68,20 @@ def _canned_problem(
     )
 
 
-def _canned_resolution() -> ResolutionOutput:
-    return ResolutionOutput(
+def _canned_incoming() -> IncomingRequestOutput:
+    return IncomingRequestOutput(
         subject="Cannot log in",
         body="Hi team, I cannot log in to my account.",
-        turns=[
-            ResolutionTurnOutput(
-                speaker="customer",
-                name="Customer",
-                content="Hi team, I cannot log in to my account.",
-            ),
-            ResolutionTurnOutput(
-                speaker="agent",
-                name="Agent",
-                content="Thanks for reaching out. Could you try resetting your password?",
-            ),
-        ],
-        resolved=True,
+    )
+
+
+def _canned_turn() -> DialogueTurnOutput:
+    # done=True so each dialogue ends after the first agent turn (2 turns total).
+    return DialogueTurnOutput(
+        speaker="agent",
+        content="Thanks for reaching out. Resetting your password should fix this.",
+        done=True,
+        done_reason="resolved",
     )
 
 
@@ -113,7 +111,7 @@ def _build_settings(*, tmp_path: Path, total: int = 10, problems: int = 4) -> Ap
                 "l3": 0.1,
             },
             assignment_strategy="complexity_weighted",
-            turns_per_type={"docs_request": 2, "l1": 3, "l2": 5, "l3": 7},
+            dialogue=DialogueConfig(turn_cap=20),
             tier_proportions={"standard": 0.6, "premium": 0.3, "enterprise": 0.1},
             tone_proportions_per_type={
                 "docs_request": {"neutral": 1.0},
@@ -132,7 +130,8 @@ def _build_fake_factory(tmp_path: Path) -> AgentFactory:
     fake = FakeChatModel(
         structured={
             ProblemBrainstormOutput: _canned_problem(),
-            ResolutionOutput: _canned_resolution(),
+            IncomingRequestOutput: _canned_incoming(),
+            DialogueTurnOutput: _canned_turn(),
             Verdict: _canned_verdict(),
         }
     )
@@ -148,8 +147,10 @@ def _build_fake_factory(tmp_path: Path) -> AgentFactory:
             "combined_checker",
             "problem_brainstorm",
             "combined_problem_check",
-            "resolution_generator",
-            "combined_resolution_check",
+            "incoming_request_generator",
+            "customer_turn_generator",
+            "agent_turn_generator",
+            "conversation_consistency_check",
         )
     }
     # The factory needs a populated prompt registry rooted at the project's prompts/ dir.

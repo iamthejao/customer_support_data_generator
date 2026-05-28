@@ -15,6 +15,7 @@ class FakeChatModel(BaseChatModel):
     canned: dict[str, str] = Field(default_factory=dict)
     call_log: list[Any] = Field(default_factory=list)
     structured: dict[type[BaseModel], BaseModel] = Field(default_factory=dict)
+    structured_seq: dict[type[BaseModel], list[BaseModel]] = Field(default_factory=dict)
 
     model_config: ClassVar = {"arbitrary_types_allowed": True}
 
@@ -60,8 +61,12 @@ class FakeChatModel(BaseChatModel):
             KeyError: If no canned output is configured for the schema.
         """
         canned = self.structured
+        seq = self.structured_seq
 
         def _return_canned(_inputs: Any) -> BaseModel:
+            queue = seq.get(schema)
+            if queue:
+                return queue.pop(0)
             if schema not in canned:
                 raise KeyError(
                     f"FakeChatModel has no canned structured output for {schema.__name__}"

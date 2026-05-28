@@ -17,9 +17,11 @@ LLMBuilder = Callable[[AgentLLMConfig], BaseChatModel]
 
 _ROLE_FALLBACK: dict[str, str] = {
     "problem_brainstorm": "generator",
-    "resolution_generator": "generator",
+    "incoming_request_generator": "generator",
+    "customer_turn_generator": "generator",
+    "agent_turn_generator": "generator",
     "combined_problem_check": "combined_checker",
-    "combined_resolution_check": "combined_checker",
+    "conversation_consistency_check": "combined_checker",
 }
 
 

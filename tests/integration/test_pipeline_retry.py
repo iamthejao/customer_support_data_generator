@@ -29,6 +29,7 @@ from csfd.settings import (
     AgentLLMConfig,
     AppSettings,
     BudgetConfig,
+    DialogueConfig,
     ObservabilityConfig,
     PipelineConfig,
     ProblemDatabaseConfig,
@@ -105,7 +106,7 @@ def _settings(tmp_path: Path) -> AppSettings:
             total=0,
             type_proportions={"docs_request": 1.0, "l1": 0.0, "l2": 0.0, "l3": 0.0},
             assignment_strategy="complexity_weighted",
-            turns_per_type={"docs_request": 2, "l1": 3, "l2": 5, "l3": 7},
+            dialogue=DialogueConfig(turn_cap=20),
             tier_proportions={"standard": 1.0, "premium": 0.0, "enterprise": 0.0},
             tone_proportions_per_type={
                 "docs_request": {"neutral": 1.0},
@@ -149,8 +150,10 @@ def test_phase1_retry_path_accepts_clean_on_second_attempt(
             "combined_checker",
             "problem_brainstorm",
             "combined_problem_check",
-            "resolution_generator",
-            "combined_resolution_check",
+            "incoming_request_generator",
+            "customer_turn_generator",
+            "agent_turn_generator",
+            "conversation_consistency_check",
         )
     }
     reg = PromptRegistry(root=Path("prompts"))

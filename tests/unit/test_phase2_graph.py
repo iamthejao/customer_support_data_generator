@@ -18,10 +18,11 @@ from langgraph.graph.state import CompiledStateGraph
 from csfd.agents.base import Verdict
 from csfd.agents.factory import AgentFactory
 from csfd.graph.phase2_graph import (
+    _route_after_agent_turn,
     _route_after_build_allocation_plan,
     _route_after_commit_resolution,
-    _route_after_generate_resolution,
-    _route_after_validate_resolution,
+    _route_after_customer_turn,
+    _route_after_validate_conversation,
     build_phase2_subgraph,
 )
 from csfd.graph.pipeline_graph import PipelineState, _PlanSlot
@@ -33,6 +34,7 @@ from csfd.settings import (
     AgentLLMConfig,
     AppSettings,
     BudgetConfig,
+    DialogueConfig,
     ObservabilityConfig,
     PipelineConfig,
     ProblemDatabaseConfig,
@@ -85,7 +87,7 @@ def _build_stub_settings() -> AppSettings:
             total=1,
             type_proportions={"docs_request": 1.0, "l1": 0.0, "l2": 0.0, "l3": 0.0},
             assignment_strategy="complexity_weighted",
-            turns_per_type={"docs_request": 2, "l1": 3, "l2": 5, "l3": 7},
+            dialogue=DialogueConfig(turn_cap=20),
             tier_proportions={"standard": 1.0},
             tone_proportions_per_type={
                 "docs_request": {"neutral": 1.0},
@@ -112,8 +114,10 @@ def _build_stub_factory() -> AgentFactory:
     reg._handles = {
         "phase1.problem_brainstorm_v2": handle,
         "phase1.problem_combined_check": handle,
-        "phase2.resolution_generator": handle,
-        "phase2.resolution_combined_check": handle,
+        "phase2.incoming_request": handle,
+        "phase2.customer_turn": handle,
+        "phase2.agent_turn": handle,
+        "phase2.conversation_consistency_check": handle,
     }
     fake = FakeChatModel(structured={})
 
@@ -135,14 +139,47 @@ def _build_stub_factory() -> AgentFactory:
 # --------------------------------------------------------------------------- #
 
 
-def test_route_after_generate_when_validation_enabled() -> None:
-    state = _make_state(validation_enabled=True)
-    assert _route_after_generate_resolution(state) == "validate"
+def _dialogue_turns(n: int) -> list[Any]:
+    from csfd.pipeline import DialogueTurnOutput
+
+    return [
+        DialogueTurnOutput(speaker="customer" if i % 2 == 0 else "agent", content=f"t{i}")
+        for i in range(n)
+    ]
 
 
-def test_route_after_generate_when_validation_disabled() -> None:
-    state = _make_state(validation_enabled=False)
-    assert _route_after_generate_resolution(state) == "commit"
+def test_route_after_agent_turn_done() -> None:
+    state = _make_state(dialogue_done=True, current_dialogue_turns=_dialogue_turns(4))
+    assert _route_after_agent_turn(state) == "consistency"
+
+
+def test_route_after_agent_turn_continue() -> None:
+    state = _make_state(dialogue_done=False, current_dialogue_turns=_dialogue_turns(4))
+    assert _route_after_agent_turn(state) == "customer"
+
+
+def test_route_after_agent_turn_cap() -> None:
+    state = _make_state(
+        dialogue_done=False, current_dialogue_turns=_dialogue_turns(20), dialogue_turn_cap=20
+    )
+    assert _route_after_agent_turn(state) == "cap"
+
+
+def test_route_after_customer_turn_done() -> None:
+    state = _make_state(dialogue_done=True, current_dialogue_turns=_dialogue_turns(3))
+    assert _route_after_customer_turn(state) == "consistency"
+
+
+def test_route_after_customer_turn_continue() -> None:
+    state = _make_state(dialogue_done=False, current_dialogue_turns=_dialogue_turns(3))
+    assert _route_after_customer_turn(state) == "agent"
+
+
+def test_route_after_customer_turn_cap() -> None:
+    state = _make_state(
+        dialogue_done=False, current_dialogue_turns=_dialogue_turns(20), dialogue_turn_cap=20
+    )
+    assert _route_after_customer_turn(state) == "cap"
 
 
 def test_route_after_validate_pass() -> None:
@@ -151,7 +188,7 @@ def test_route_after_validate_pass() -> None:
         retry_attempt=0,
         max_retries=2,
     )
-    assert _route_after_validate_resolution(state) == "pass"
+    assert _route_after_validate_conversation(state) == "pass"
 
 
 def test_route_after_validate_retry() -> None:
@@ -160,7 +197,7 @@ def test_route_after_validate_retry() -> None:
         retry_attempt=1,
         max_retries=3,
     )
-    assert _route_after_validate_resolution(state) == "retry"
+    assert _route_after_validate_conversation(state) == "retry"
 
 
 def test_route_after_validate_exhausted() -> None:
@@ -169,7 +206,7 @@ def test_route_after_validate_exhausted() -> None:
         retry_attempt=2,
         max_retries=2,
     )
-    assert _route_after_validate_resolution(state) == "exhausted"
+    assert _route_after_validate_conversation(state) == "exhausted"
 
 
 def test_route_after_commit_with_more_slots() -> None:
@@ -214,9 +251,13 @@ def test_build_phase2_subgraph_compiles_with_expected_nodes(tmp_path: Path) -> N
     node_names = set(compiled.get_graph().nodes.keys())
     expected = {
         "build_allocation_plan",
-        "generate_resolution",
-        "validate_resolution",
-        "commit_resolution",
+        "generate_incoming_request",
+        "generate_agent_turn",
+        "generate_customer_turn",
+        "validate_conversation",
+        "commit_dialogue",
+        "_route_consistency_or_skip",
+        "_mark_cap_hit",
         "_bump_retry",
         "_mark_exhausted",
         "_mark_validation_skipped",
