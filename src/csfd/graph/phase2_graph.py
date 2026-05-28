@@ -66,7 +66,7 @@ from typing import Any, Literal
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from csfd.agents.base import AgentContext, Verdict
+from csfd.agents.base import AgentContext, Issue, Verdict
 from csfd.agents.factory import AgentFactory
 from csfd.agents.tracing import ParentLink, TracingAdapter
 from csfd.allocator import ProblemRef, build_allocation_plan
@@ -342,14 +342,9 @@ async def validate_conversation_node(
     """LLM call: consistency review of the full transcript; may return edits."""
     slot = state.plan_slots[state.slot_index]
     ticket_uid = f"{state.run_id}:{slot.index:06d}"
+    # _converge_node has already assembled the accumulated turns into the draft.
     assert state.current_resolution_draft is not None
-    end_reason = state.dialogue_end_reason or "agent_done"
-    draft = _assemble_resolution(
-        subject=state.current_resolution_draft.subject,
-        body=state.current_resolution_draft.body,
-        turns=state.current_dialogue_turns,
-        end_reason=end_reason,
-    )
+    draft = state.current_resolution_draft
 
     problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
     inputs: dict[str, Any] = {
@@ -389,12 +384,31 @@ async def validate_conversation_node(
     edited = verdict.status == "pass_with_edits"
     final_draft = _apply_consistency_edits(draft, verdict) if passed else draft
     quality_flag = state.last_quality_flag
-    if edited:
+    # An edited transcript is flagged unless a turn-cap-hit already claimed the
+    # slot — the cap is the more actionable signal and must not be overwritten.
+    if edited and quality_flag != "warning:turn_cap_hit":
         quality_flag = "info:consistency_edited"
+    # Surface the consistency issues on a fail so the re-roll's agent turns can
+    # see them via AgentContext (see _generate_turn's prior_issues wiring).
+    issues = (
+        []
+        if passed
+        else [
+            Issue(
+                severity="error",
+                location="conversation",
+                rule_violated="consistency",
+                explanation=msg,
+            )
+            for msg in verdict.issues
+        ]
+    )
     return {
         "current_resolution_draft": final_draft,
         "current_dialogue_turns": final_draft.turns,
-        "last_verdict": Verdict(checker="conversation_consistency_check", passed=passed, issues=[]),
+        "last_verdict": Verdict(
+            checker="conversation_consistency_check", passed=passed, issues=issues
+        ),
         "last_quality_flag": quality_flag,
     }
 
@@ -480,7 +494,13 @@ async def _mark_exhausted_node(state: PipelineState) -> dict[str, Any]:
 
 
 async def _mark_validation_skipped_node(state: PipelineState) -> dict[str, Any]:
-    """Stamp the validation-skipped warning when checks are disabled."""
+    """Stamp the validation-skipped warning when checks are disabled.
+
+    A turn-cap-hit flag takes precedence: a capped conversation that also skips
+    validation should still surface the cap, the more actionable signal.
+    """
+    if state.last_quality_flag == "warning:turn_cap_hit":
+        return {}
     return {"last_quality_flag": "warning:validation_skipped"}
 
 
@@ -493,8 +513,21 @@ async def _mark_cap_hit_node(state: PipelineState) -> dict[str, Any]:
 
 
 async def _converge_node(state: PipelineState) -> dict[str, Any]:
-    """No-op join point after a conversation ends (done or cap) before validation routing."""
-    return {}
+    """Assemble the finished transcript into the draft before validation routing.
+
+    Both the validate and the skip branches read ``current_resolution_draft`` at
+    commit time, so the accumulated turns + derived ``resolved``/``end_reason``
+    must be folded in here — not only inside ``validate_conversation_node`` —
+    otherwise the validation-disabled path would commit an empty turn list.
+    """
+    assert state.current_resolution_draft is not None
+    draft = _assemble_resolution(
+        subject=state.current_resolution_draft.subject,
+        body=state.current_resolution_draft.body,
+        turns=state.current_dialogue_turns,
+        end_reason=state.dialogue_end_reason or "agent_done",
+    )
+    return {"current_resolution_draft": draft}
 
 
 # --------------------------------------------------------------------------- #
