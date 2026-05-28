@@ -6,7 +6,7 @@ opens the checkpointer and ``ainvoke``s the parent graph, plus the LLM-output
 contracts and small pure helpers that are reused by graph nodes:
 
 * :class:`ProblemBrainstormOutput` / :class:`ResolutionOutput` /
-  :class:`ResolutionTurnOutput` — Pydantic schemas the LLM is asked to produce.
+  :class:`DialogueTurnOutput` — Pydantic schemas the LLM is asked to produce.
 * :func:`_assign_target_complexities` — proportion → integer-count assignment
   via largest-remainder rounding (used by Phase 1's ``init_phase1`` node).
 * :func:`_compute_run_stats` — end-of-run aggregation written to
@@ -56,17 +56,69 @@ class ProblemBrainstormOutput(BaseModel):
     resolution_hints: dict[str, str] = Field(default_factory=dict)
 
 
-class ResolutionTurnOutput(BaseModel):
+class DialogueTurnOutput(BaseModel):
     speaker: Literal["customer", "agent"]
-    name: str
     content: str
+    done: bool = False
+    done_reason: str | None = None
+
+
+class IncomingRequestOutput(BaseModel):
+    subject: str
+    body: str
 
 
 class ResolutionOutput(BaseModel):
     subject: str
     body: str
-    turns: list[ResolutionTurnOutput] = Field(default_factory=list)
-    resolved: bool = True
+    turns: list[DialogueTurnOutput] = Field(default_factory=list)
+    resolved: bool = False
+    end_reason: Literal["customer_done", "agent_done", "cap_hit"] = "agent_done"
+
+
+class ConsistencyVerdict(BaseModel):
+    status: Literal["pass", "pass_with_edits", "fail"]
+    issues: list[str] = Field(default_factory=list)
+    edited_turns: list[DialogueTurnOutput] | None = None
+    edited_subject: str | None = None
+    edited_body: str | None = None
+
+
+# Backward-compat alias — to be removed once Task 10 updates the integration tests.
+class ResolutionTurnOutput(BaseModel):
+    """Deprecated: replaced by DialogueTurnOutput. Retained for import compat."""
+
+    speaker: Literal["customer", "agent"]
+    name: str = ""
+    content: str
+
+
+RESOLVED_DONE_REASONS = frozenset({"resolved", "customer_satisfied", "issue_fixed", "closed"})
+
+
+def _derive_resolved(end_reason: str, last_done_reason: str | None) -> bool:
+    """True iff the conversation ended naturally on a resolved-style reason."""
+    if end_reason == "cap_hit":
+        return False
+    return last_done_reason in RESOLVED_DONE_REASONS
+
+
+def _assemble_resolution(
+    *,
+    subject: str,
+    body: str,
+    turns: list[DialogueTurnOutput],
+    end_reason: Literal["customer_done", "agent_done", "cap_hit"],
+) -> ResolutionOutput:
+    """Build a ResolutionOutput from accumulated dialogue state, deriving `resolved`."""
+    last_reason = turns[-1].done_reason if turns else None
+    return ResolutionOutput(
+        subject=subject,
+        body=body,
+        turns=turns,
+        resolved=_derive_resolved(end_reason, last_reason),
+        end_reason=end_reason,
+    )
 
 
 # --------------------------------------------------------------------------- #
