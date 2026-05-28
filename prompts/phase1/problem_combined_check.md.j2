@@ -11,6 +11,10 @@ Validate the following rules in one pass:
 4. `resolution_hints_invalid` — keys (if present) must be a subset of {"docs_request","l1","l2","l3"}; values must be short, on-topic, and consistent with the stated `complexity` (no `l3` depth on a `simple` problem and vice versa).
 5. `category_off_topic` — `category` must name the actual subsystem described in `title` / `summary`; a generic catch-all is a warning, a wrong subsystem is an error.
 6. `complexity_voice_mismatch` — narrative depth in `background` must match `complexity`: `simple` reads as a single symptom; `medium` includes 2–3 hypotheses; `complex` includes a detail that rules out the obvious first hypothesis.
+7. `symptoms_invalid` — `symptoms` must be 1–4 short customer-observable facts (what the customer sees / hears / measures). It must not contain internal jargon, root-cause statements, or fix instructions.
+8. `root_cause_missing` — `root_cause` must be non-empty, concrete (component / config / dependency / process step), and must not be a restatement of `symptoms` or a vague "user error".
+9. `fault_domain_mismatch` — `fault_domain` must be one of {hardware, software, configuration, process, billing, account, integration} and must align with the subsystem in `title` / `category` and the stated `root_cause`.
+10. `tags_invalid` — `tags` must be 3–6 lowercase short keywords, no duplicates, no sentence fragments.
 
 For each rule violated, emit one Issue with `severity` ("error" for hard violations, "warning" for stylistic concerns), `location` (which field), `rule_violated` (one of the ids above, verbatim), `explanation`, and an optional `suggested_fix`.
 

@@ -24,6 +24,7 @@ import json
 import sqlite3
 import struct
 from dataclasses import dataclass
+from dataclasses import field as dataclasses_field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -354,6 +355,11 @@ class ProblemRecord:
     resolution_hints: dict[str, str]
     quality_flag: str | None
     created_at: datetime
+    symptoms: list[str] = dataclasses_field(default_factory=list)
+    root_cause: list[str] = dataclasses_field(default_factory=list)
+    fault_domain: str = "software"
+    customer_impact: str = "degraded"
+    tags: list[str] = dataclasses_field(default_factory=list)
 
 
 class ProblemRepo:
@@ -366,8 +372,9 @@ class ProblemRepo:
                 """
                 INSERT OR IGNORE INTO problems
                   (id, run_id, title, summary, background, category,
-                   complexity, resolution_hints_json, quality_flag, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   complexity, resolution_hints_json, quality_flag, created_at,
+                   symptoms_json, root_cause_json, fault_domain, customer_impact, tags_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     p.id,
@@ -380,6 +387,11 @@ class ProblemRepo:
                     json.dumps(p.resolution_hints, ensure_ascii=False),
                     p.quality_flag,
                     p.created_at.isoformat(),
+                    json.dumps(p.symptoms, ensure_ascii=False),
+                    json.dumps(p.root_cause, ensure_ascii=False),
+                    p.fault_domain,
+                    p.customer_impact,
+                    json.dumps(p.tags, ensure_ascii=False),
                 ),
             )
 
@@ -389,8 +401,9 @@ class ProblemRepo:
                 """
                 INSERT OR IGNORE INTO problems
                   (id, run_id, title, summary, background, category,
-                   complexity, resolution_hints_json, quality_flag, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   complexity, resolution_hints_json, quality_flag, created_at,
+                   symptoms_json, root_cause_json, fault_domain, customer_impact, tags_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     p.id,
@@ -403,6 +416,11 @@ class ProblemRepo:
                     json.dumps(p.resolution_hints, ensure_ascii=False),
                     p.quality_flag,
                     p.created_at.isoformat(),
+                    json.dumps(p.symptoms, ensure_ascii=False),
+                    json.dumps(p.root_cause, ensure_ascii=False),
+                    p.fault_domain,
+                    p.customer_impact,
+                    json.dumps(p.tags, ensure_ascii=False),
                 ),
             )
 
@@ -417,6 +435,12 @@ class ProblemRepo:
 
 def _row_to_problem(r: sqlite3.Row) -> ProblemRecord:
     hints = json.loads(r["resolution_hints_json"]) if r["resolution_hints_json"] else {}
+    keys = r.keys()
+    symptoms = json.loads(r["symptoms_json"]) if "symptoms_json" in keys else []
+    root_cause = json.loads(r["root_cause_json"]) if "root_cause_json" in keys else []
+    tags = json.loads(r["tags_json"]) if "tags_json" in keys else []
+    fault_domain = r["fault_domain"] if "fault_domain" in keys else "software"
+    customer_impact = r["customer_impact"] if "customer_impact" in keys else "degraded"
     return ProblemRecord(
         id=r["id"],
         run_id=r["run_id"],
@@ -428,6 +452,11 @@ def _row_to_problem(r: sqlite3.Row) -> ProblemRecord:
         resolution_hints=hints,
         quality_flag=r["quality_flag"],
         created_at=datetime.fromisoformat(r["created_at"]),
+        symptoms=symptoms,
+        root_cause=root_cause,
+        fault_domain=fault_domain,
+        customer_impact=customer_impact,
+        tags=tags,
     )
 
 
