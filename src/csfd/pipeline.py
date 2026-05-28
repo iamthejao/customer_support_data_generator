@@ -121,6 +121,24 @@ def _assemble_resolution(
     )
 
 
+def _apply_consistency_edits(
+    draft: ResolutionOutput, verdict: ConsistencyVerdict
+) -> ResolutionOutput:
+    """Return the draft unchanged on pass, or a new draft with the verdict's edits applied.
+
+    Only fields the verdict explicitly sets are replaced; `resolved` is re-derived
+    from the (possibly edited) turns against the original `end_reason`.
+    """
+    if verdict.status != "pass_with_edits":
+        return draft
+    subject = verdict.edited_subject if verdict.edited_subject is not None else draft.subject
+    body = verdict.edited_body if verdict.edited_body is not None else draft.body
+    turns = verdict.edited_turns if verdict.edited_turns is not None else draft.turns
+    return _assemble_resolution(
+        subject=subject, body=body, turns=turns, end_reason=draft.end_reason
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Pure helpers reused by graph nodes
 # --------------------------------------------------------------------------- #
