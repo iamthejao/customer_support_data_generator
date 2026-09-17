@@ -97,10 +97,15 @@ def schedule_first_contact(calendar: CalendarConfig, rng: Random) -> datetime:
     return midnight + timedelta(hours=open_h, minutes=minute, seconds=rng.randrange(60))
 
 
-def _in_business_hours(at: datetime, calendar: CalendarConfig) -> bool:
+def _business_window(calendar: CalendarConfig) -> tuple[int, int]:
+    """Minutes-of-day a contact may fall in: business hours less the closing half hour."""
     open_h, close_h = calendar.business_hours
-    minutes = at.hour * 60 + at.minute
-    return _is_business_day(at) and open_h * 60 <= minutes < close_h * 60 - 30
+    return open_h * 60, close_h * 60 - 30
+
+
+def _in_business_hours(at: datetime, calendar: CalendarConfig) -> bool:
+    open_min, close_min = _business_window(calendar)
+    return _is_business_day(at) and open_min <= at.hour * 60 + at.minute < close_min
 
 
 def schedule_next_contact(
@@ -133,6 +138,44 @@ def _roll_into_business_hours(at: datetime, calendar: CalendarConfig, rng: Rando
     return day.replace(hour=open_h, minute=0, second=0, microsecond=0) + morning_jitter
 
 
+def _business_minutes_between(start: datetime, end: datetime, calendar: CalendarConfig) -> float:
+    """Working minutes from ``start`` to ``end``, skipping nights and weekends."""
+    if end <= start:
+        return 0.0
+    open_min, close_min = _business_window(calendar)
+    total = 0.0
+    day = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    while day <= end:
+        if _is_business_day(day):
+            lo = max(day + timedelta(minutes=open_min), start)
+            hi = min(day + timedelta(minutes=close_min), end)
+            if hi > lo:
+                total += (hi - lo).total_seconds() / 60
+        day += timedelta(days=1)
+    return total
+
+
+def _advance_business_minutes(
+    start: datetime, minutes: float, calendar: CalendarConfig
+) -> datetime:
+    """The moment ``minutes`` working minutes after ``start``, always inside business hours."""
+    open_min, close_min = _business_window(calendar)
+    at = start
+    remaining = minutes
+    while True:
+        day = at.replace(hour=0, minute=0, second=0, microsecond=0)
+        if _is_business_day(at):
+            at = max(at, day + timedelta(minutes=open_min))
+            available = (day + timedelta(minutes=close_min) - at).total_seconds() / 60
+            if remaining < available:
+                return at + timedelta(minutes=remaining)
+            remaining -= max(0.0, available)
+        day += timedelta(days=1)
+        while not _is_business_day(day):
+            day += timedelta(days=1)
+        at = day + timedelta(minutes=open_min)
+
+
 def estimate_email_times(
     speakers: Sequence[str],
     *,
@@ -146,7 +189,10 @@ def estimate_email_times(
     Each reply follows the previous message after a log-uniform delay and is
     moved into business hours. When another contact of the same case is planned
     at ``next_contact_at``, the thread is compressed to finish well before it,
-    so contacts never interleave and planned start times stay untouched.
+    so contacts never interleave and planned start times stay untouched. The
+    compression is measured in working minutes, so a squeezed thread still has
+    every message inside business hours — it just finishes closer to the next
+    contact than the drawn delays would have.
     """
     sent = [started_at]
     for speaker in speakers[1:]:
@@ -154,10 +200,16 @@ def estimate_email_times(
         delay = timedelta(minutes=math.exp(rng.uniform(math.log(lo), math.log(hi))))
         sent.append(_roll_into_business_hours(sent[-1] + delay, calendar, rng))
     if next_contact_at is not None and len(sent) > 1:
-        budget = (next_contact_at - started_at) * _EMAIL_DEADLINE_SHARE
-        span = sent[-1] - started_at
-        if span > budget:
-            sent = [started_at + (t - started_at) * (budget / span) for t in sent]
+        offsets = [_business_minutes_between(started_at, t, calendar) for t in sent]
+        budget = (
+            _business_minutes_between(started_at, next_contact_at, calendar) * _EMAIL_DEADLINE_SHARE
+        )
+        if offsets[-1] > budget:
+            scale = budget / offsets[-1]
+            sent = [
+                started_at,
+                *(_advance_business_minutes(started_at, o * scale, calendar) for o in offsets[1:]),
+            ]
     return [t.replace(microsecond=0) for t in sent]
 
 

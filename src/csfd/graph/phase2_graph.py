@@ -154,8 +154,6 @@ def _effective_turn_cap(state: PipelineState) -> int:
 # step; everything else that ended without one gets its own label.
 EndedLabel = Literal["dropped", "cap_hit", "frustrated", "follow_up", "unresolved"]
 
-_AGREED_DONE_REASONS = frozenset({"follow_up", "escalation"})
-
 
 def _ended_label(contact: _PriorContact) -> EndedLabel:
     """Describe how an already-committed contact of this case ended."""
@@ -166,7 +164,7 @@ def _ended_label(contact: _PriorContact) -> EndedLabel:
     last_reason = contact.turns[-1].done_reason if contact.turns else None
     if last_reason == "customer_frustrated":
         return "frustrated"
-    if last_reason in _AGREED_DONE_REASONS:
+    if last_reason == "follow_up":
         return "follow_up"
     return "unresolved"
 

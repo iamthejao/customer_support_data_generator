@@ -127,3 +127,25 @@ def test_email_thread_is_compressed_before_the_next_contact() -> None:
         assert times[0] == start
         assert times == sorted(times)
         assert times[-1] <= start + timedelta(hours=3) * 0.8
+
+
+def test_late_afternoon_thread_stays_in_hours_when_compressed() -> None:
+    """A thread opened minutes before closing still dates every message in hours."""
+    cal = CalendarConfig()
+    start = datetime(2026, 1, 5, 17, 29, tzinfo=UTC)  # Monday, one minute of the day left
+    nxt = datetime(2026, 1, 6, 8, 30, tzinfo=UTC)  # callback the next business morning
+    speakers = ["customer", "agent"] * 4
+    for seed in range(20):
+        times = estimate_email_times(
+            speakers,
+            started_at=start,
+            calendar=cal,
+            rng=derive_rng(seed, "e"),
+            next_contact_at=nxt,
+        )
+        assert times[0] == start
+        assert times == sorted(times)
+        assert times[-1] < nxt
+        for t in times:
+            assert t.weekday() < 5, t
+            assert 8 <= t.hour < 18, t

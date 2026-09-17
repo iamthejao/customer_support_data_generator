@@ -248,6 +248,22 @@ def test_unhappy_hang_up_is_not_reported_as_an_agreed_next_step(tmp_path: Path) 
         assert [c["ended"] for c in history] == ["frustrated"]
 
 
+def test_escalated_first_call_is_not_reported_as_an_agreed_next_step(tmp_path: Path) -> None:
+    rounds = RoundsConfig(proportions={2: 1.0}, callback_reasons={"follow_up": 1.0})
+    turns = [
+        # call 1 ends on an escalation: the caller was owed a callback and did nothing.
+        _turn("agent", "I am escalating this to Level 2, they will call you back.", "escalation"),
+        _turn("agent", "Sorry nobody called. Let's replace the PSU cable.", "resolved"),
+    ]
+    db, _, _ = _run(tmp_path, rounds, turns, validation=False)
+
+    first, _second = h.resolution_rows(db)
+    assert first["turns"][-1]["done_reason"] == "escalation"
+    assert not first["resolved"]
+    for history in _callback_histories(db):
+        assert [c["ended"] for c in history] == ["unresolved"]
+
+
 def test_dropped_call_is_cut_off_and_called_back(tmp_path: Path) -> None:
     rounds = RoundsConfig(proportions={2: 1.0}, callback_reasons={"dropped": 1.0})
     settings = h.build_settings(tmp_path, validation_enabled=False, channel="phone", rounds=rounds)
