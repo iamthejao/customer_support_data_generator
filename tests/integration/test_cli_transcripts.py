@@ -43,7 +43,7 @@ def _seed_email_case(db_path: Path) -> None:
             run_seed=1,
             pipeline_version="test",
             git_sha=None,
-            config_snapshot_json="{}",
+            config_snapshot_json='{"company": {"name": "CoolTherm Industrial Chillers"}}',
             stats_json=None,
             error_summary=None,
         )
@@ -103,12 +103,17 @@ def _seed_email_case(db_path: Path) -> None:
             problem_id=f"{RUN_ID}:p:0000",
             ticket_type="l1",
             turns=[
-                {"speaker": "customer", "content": "Hello, the display flickers."},
+                {
+                    "speaker": "customer",
+                    "content": "Hello, the display flickers.\n\nThanks,\nCustomer-premium-0001",
+                    "sent_at": "2026-01-06T09:15:00+00:00",
+                },
                 {
                     "speaker": "agent",
                     "content": "Please update the firmware.",
                     "done": True,
                     "done_reason": "resolved",
+                    "sent_at": "2026-01-06T10:02:00+00:00",
                 },
             ],
             turn_count=2,
@@ -118,6 +123,8 @@ def _seed_email_case(db_path: Path) -> None:
             agent_name="Agent-l1-0001",
             end_reason="agent_done",
             started_at=datetime(2026, 1, 6, 9, 15, tzinfo=UTC),
+            ended_at=datetime(2026, 1, 6, 10, 2, tzinfo=UTC),
+            duration_s=2820.0,
             case_uid=ticket_uid,
         )
     )
@@ -133,16 +140,49 @@ def test_export_transcripts_writes_email_exchange(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     root = out / RUN_ID / "transcripts"
     text = (root / "case_000001" / "email_01.txt").read_text(encoding="utf-8")
-    assert text.startswith("EMAIL EXCHANGE\ncase_id: run-email:000001\nemail: 1 of 1\n")
-    assert "started_at: 2026-01-06T09:15:00+00:00" in text
-    assert "subject: Display flickers" in text
-    assert "customer: Customer-premium-0001 (premium tier)" in text
-    assert "--- CUSTOMER ---\nHello, the display flickers.\n\n--- AGENT ---\n" in text
-    assert "duration:" not in text
+    header, _, thread = text.partition("\n\n")
+    assert header.splitlines()[:4] == [
+        "EMAIL THREAD",
+        "case_id: run-email:000001",
+        "thread: 1 of 1",
+        "channel: email",
+    ]
+    assert "started_at: 2026-01-06T09:15:00+00:00" in header
+    assert "ended_at: 2026-01-06T10:02:00+00:00" in header
+    assert "subject: Display flickers" in header
+    assert "customer: Customer-premium-0001 (premium tier)" in header
+    assert "duration:" not in header
+    first, second = thread.split("\n\n" + "-" * 40 + "\n")
+    assert first.splitlines()[:4] == [
+        "From: Customer-premium-0001 <customer-premium-0001@customer.example>",
+        "To: CoolTherm Industrial Chillers Support <support@cooltherm-industrial-chillers.example>",
+        "Date: Tue, 06 Jan 2026 09:15:00 +0000",
+        "Subject: Display flickers",
+    ]
+    assert "Hello, the display flickers.\n\nThanks,\nCustomer-premium-0001" in first
+    assert second.splitlines()[:5] == [
+        "From: Agent-l1-0001, CoolTherm Industrial Chillers Support "
+        "<support@cooltherm-industrial-chillers.example>",
+        "To: Customer-premium-0001 <customer-premium-0001@customer.example>",
+        "Date: Tue, 06 Jan 2026 10:02:00 +0000",
+        "Subject: Re: Display flickers",
+        "",
+    ]
+    # Light quoting: only the first line of the message being answered.
+    assert second.rstrip().endswith(
+        "On Tue, 06 Jan 2026 at 09:15, Customer-premium-0001 wrote:\n> Hello, the display flickers."
+    )
+    assert "> Thanks," not in second
     assert "SECRET ROOT CAUSE" not in text
     meta = json.loads((root / "case_000001" / "case.json").read_text())
     assert meta["contacts"][0]["outcome"] == "resolved"
     assert meta["contacts"][0]["end_reason"] == "agent_done"
+    assert meta["contacts"][0]["duration_s"] == 2820.0
+    index = json.loads((root / "cases.jsonl").read_text().splitlines()[0])
+    assert [u["sent_at"] for u in index["contacts"][0]["utterances"]] == [
+        "2026-01-06T09:15:00+00:00",
+        "2026-01-06T10:02:00+00:00",
+    ]
     # Only the transcripts were requested.
     assert not (out / RUN_ID / "problems.jsonl").exists()
 

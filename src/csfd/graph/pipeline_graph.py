@@ -181,6 +181,7 @@ async def init_run_node(
                     "tickets": settings.tickets.model_dump(mode="json"),
                     "validation": settings.validation.model_dump(mode="json"),
                     "embedding": settings.embedding.model_dump(mode="json"),
+                    "company": {"name": state.company.name},
                 },
                 ensure_ascii=False,
             ),

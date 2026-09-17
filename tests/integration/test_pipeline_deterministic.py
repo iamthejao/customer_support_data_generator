@@ -483,3 +483,43 @@ def test_multi_contact_plan_is_deterministic_and_counted_per_case(
     assert stats["channel_counts"] == {"phone": 14}
     # Case-level breakdowns are not inflated by callbacks.
     assert sum(stats["type_counts"].values()) == 8  # type: ignore[attr-defined]
+
+
+def test_email_send_times_are_deterministic_across_runs(
+    tmp_path: Path, company: CompanyProfile, scenarios: ScenarioCatalogue
+) -> None:
+    """The default email channel dates every message from seed + slot, not the clock."""
+    import json
+
+    def _run(sub: str) -> list[tuple[str, str, list[str]]]:
+        (tmp_path / sub).mkdir()
+        settings = _build_settings(tmp_path=tmp_path / sub, total=4, problems=2)
+        db = Database(path=Path(settings.storage.sqlite_path))
+        apply_migrations(db)
+        run_id = asyncio.run(
+            run_pipeline(
+                settings=settings,
+                factory=_build_fake_factory(tmp_path),
+                db=db,
+                company=company,
+                scenarios=scenarios,
+            )
+        )
+        with db.connect() as conn:
+            rows = conn.execute(
+                "SELECT resolution_uid, channel, turns_json FROM resolutions WHERE run_id = ?",
+                (run_id,),
+            ).fetchall()
+        return sorted(
+            (
+                r["resolution_uid"].split(":", 1)[1],
+                r["channel"],
+                [t["sent_at"] for t in json.loads(r["turns_json"])],
+            )
+            for r in rows
+        )
+
+    a, b = _run("a"), _run("b")
+    assert a == b
+    assert {row[1] for row in a} == {"email"}
+    assert all(len(sent) == 2 for _, _, sent in a)

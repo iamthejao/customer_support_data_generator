@@ -79,7 +79,12 @@ from csfd.agents.base import AgentContext, Issue, Verdict
 from csfd.agents.factory import AgentFactory
 from csfd.agents.tracing import ParentLink, TracingAdapter
 from csfd.allocator import ProblemRef, build_allocation_plan
-from csfd.calls import describe_gap, estimate_turn_timings, scripted_greeting
+from csfd.calls import (
+    describe_gap,
+    estimate_email_times,
+    estimate_turn_timings,
+    scripted_greeting,
+)
 from csfd.graph.pipeline_graph import PipelineState, _PlanSlot, _PriorContact, _RoundSpec
 from csfd.pipeline import (
     ConsistencyVerdict,
@@ -575,6 +580,34 @@ def _timed_turns(
     return out, max((t.end_s for t in timings), default=0.0)
 
 
+def _dated_emails(
+    state: PipelineState,
+    slot: _PlanSlot,
+    rnd: _RoundSpec,
+    turns: list[DialogueTurnOutput],
+    settings: AppSettings,
+) -> tuple[list[dict[str, Any]], datetime]:
+    """Attach a seeded ``sent_at`` to each email of a thread; return (turns, last sent_at).
+
+    A thread with a later contact planned in the same case is compressed to end
+    before that contact starts.
+    """
+    assert rnd.started_at is not None
+    next_round = slot.rounds[state.round_index + 1] if rnd.sequence < rnd.count else None
+    times = estimate_email_times(
+        [t.speaker for t in turns],
+        started_at=rnd.started_at,
+        calendar=settings.tickets.calendar,
+        rng=derive_rng(state.run_seed, f"{contact_label(slot.index, rnd.sequence)}:timing"),
+        next_contact_at=next_round.started_at if next_round else None,
+    )
+    out = [
+        {**turn.model_dump(), "sent_at": at.isoformat()}
+        for turn, at in zip(turns, times, strict=True)
+    ]
+    return out, times[-1]
+
+
 async def commit_dialogue_node(
     state: PipelineState,
     *,
@@ -606,6 +639,9 @@ async def commit_dialogue_node(
         turns, duration_s = _timed_turns(state, slot, rnd, draft.turns)
         if rnd.started_at is not None:
             ended_at = rnd.started_at + timedelta(seconds=duration_s)
+    elif rnd.started_at is not None and draft.turns:
+        turns, ended_at = _dated_emails(state, slot, rnd, draft.turns, settings)
+        duration_s = (ended_at - rnd.started_at).total_seconds()
 
     ir_id = await IncomingRequestRepo(db).acreate(
         adb,

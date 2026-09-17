@@ -11,15 +11,20 @@ downstream consumers (e.g. a report pipeline that reads call transcripts)::
             call_02.txt             # further contacts of a multi-contact case
 
 Each ``.txt`` file is a ``key: value`` header, a blank line, then the
-transcript. Ground truth (root cause, resolution hints) is deliberately not
-written here; join ``case.json``'s ``problem_id`` against ``problems.jsonl``.
+transcript: ``[HH:MM:SS] SPEAKER: text`` lines for a call, or a thread of
+emails (From / To / Date / Subject, body, a one-line quote of the message
+replied to) for email. Addresses use reserved ``.example`` domains. Ground
+truth (root cause, resolution hints) is deliberately not written here; join
+``case.json``'s ``problem_id`` against ``problems.jsonl``.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from email.utils import format_datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +47,10 @@ ORDER BY l.slot_index, res.round_index
 """
 
 _FILE_NOUN = {"phone": "call", "email": "email"}
+# What one contact is called in headers: a call, or a thread of emails.
+_CONTACT_NOUN = {"phone": "call", "email": "thread"}
+_EMAIL_SEPARATOR = "-" * 40
+_QUOTE_MAX_CHARS = 100
 
 
 @dataclass(slots=True)
@@ -86,6 +95,7 @@ class Case:
     customer_tone: str
     channel: str
     customer_name: str
+    company_name: str | None = None
     contacts: list[Contact] = field(default_factory=list)
 
     @property
@@ -108,6 +118,11 @@ def load_cases(db: Database, run_id: str) -> list[Case]:
     """Read every committed case of a run, contacts ordered by sequence."""
     with db.connect() as conn:
         rows = conn.execute(_CASES_SQL, (run_id,)).fetchall()
+        run = conn.execute(
+            "SELECT config_snapshot_json FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
+    snapshot = json.loads(run["config_snapshot_json"]) if run else {}
+    company_name = (snapshot.get("company") or {}).get("name")
     cases: dict[str, Case] = {}
     for r in rows:
         case = cases.get(r["ticket_uid"])
@@ -122,6 +137,7 @@ def load_cases(db: Database, run_id: str) -> list[Case]:
                 customer_tone=r["customer_tone"],
                 channel=r["channel"],
                 customer_name=r["customer_name"],
+                company_name=company_name,
             )
         case.contacts.append(
             Contact(
@@ -167,18 +183,19 @@ def _format_gap(seconds: float) -> str:
 
 
 def _header(case: Case, contact: Contact) -> list[str]:
+    phone = contact.channel == "phone"
     lines = [
-        "CALL TRANSCRIPT" if contact.channel == "phone" else "EMAIL EXCHANGE",
+        "CALL TRANSCRIPT" if phone else "EMAIL THREAD",
         f"case_id: {case.case_id}",
     ]
-    noun = _FILE_NOUN.get(contact.channel, "contact")
+    noun = _CONTACT_NOUN.get(contact.channel, "contact")
     lines.append(f"{noun}: {contact.sequence} of {contact.count}")
-    lines.append("channel: phone (inbound)" if contact.channel == "phone" else "channel: email")
+    lines.append("channel: phone (inbound)" if phone else "channel: email")
     if contact.started_at is not None:
         lines.append(f"started_at: {contact.started_at.isoformat()}")
     if contact.ended_at is not None:
         lines.append(f"ended_at: {contact.ended_at.isoformat()}")
-    if contact.duration_s is not None:
+    if phone and contact.duration_s is not None:
         lines.append(f"duration: {format_offset(contact.duration_s)}")
     gap = _gap_s(case, contact)
     if gap is not None:
@@ -214,15 +231,56 @@ def _phone_lines(contact: Contact, *, timestamps: bool) -> list[str]:
     return lines
 
 
-def _email_lines(contact: Contact) -> list[str]:
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "support"
+
+
+def _email_parties(case: Case, contact: Contact) -> dict[str, str]:
+    """Display addresses for both sides; ``.example`` domains are reserved (RFC 2606)."""
+    desk = f"{case.company_name} Support" if case.company_name else "Support"
+    support_domain = f"{_slug(case.company_name or 'support')}.example"
+    agent = contact.agent_name or "Support"
+    return {
+        "customer": f"{contact.customer_name} <{_slug(contact.customer_name)}@customer.example>",
+        "agent": f"{agent}, {desk} <support@{support_domain}>",
+        "support": f"{desk} <support@{support_domain}>",
+    }
+
+
+def _quote_line(text: str) -> str:
+    first = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    if len(first) > _QUOTE_MAX_CHARS:
+        first = first[: _QUOTE_MAX_CHARS - 1].rstrip() + "…"
+    return f"> {first}"
+
+
+def _email_lines(case: Case, contact: Contact) -> list[str]:
+    parties = _email_parties(case, contact)
+    subject = contact.reason.strip()
+    reply_subject = subject if subject.lower().startswith("re:") else f"Re: {subject}"
     lines: list[str] = []
-    for turn in contact.turns:
-        if lines:
-            lines.append("")
-        lines.append(f"--- {str(turn['speaker']).upper()} ---")
-        lines.append(str(turn["content"]).strip())
+    prev: dict[str, Any] | None = None
+    prev_sender = ""
+    for i, turn in enumerate(contact.turns):
+        from_customer = turn["speaker"] == "customer"
+        sender = contact.customer_name if from_customer else (contact.agent_name or "Support")
+        if i:
+            lines += ["", _EMAIL_SEPARATOR]
+        lines.append(f"From: {parties['customer'] if from_customer else parties['agent']}")
+        # The customer writes to the support desk; agents reply to the customer.
+        lines.append(f"To: {parties['support'] if from_customer else parties['customer']}")
+        sent_at = _parse_ts(turn.get("sent_at"))
+        if sent_at is not None:
+            lines.append(f"Date: {format_datetime(sent_at)}")
+        lines.append(f"Subject: {subject if i == 0 else reply_subject}")
+        lines += ["", str(turn["content"]).strip()]
+        if prev is not None:
+            prev_sent = _parse_ts(prev.get("sent_at"))
+            when = f"On {prev_sent.strftime('%a, %d %b %Y at %H:%M')}, " if prev_sent else ""
+            lines += ["", f"{when}{prev_sender} wrote:", _quote_line(str(prev["content"]))]
+        prev, prev_sender = turn, sender
     if contact.end_reason == "dropped":
-        lines += ["", "(no further reply in this exchange)"]
+        lines += ["", "(no further reply in this thread)"]
     return lines
 
 
@@ -231,7 +289,7 @@ def render_transcript(case: Case, contact: Contact, *, timestamps: bool = True) 
     body = (
         _phone_lines(contact, timestamps=timestamps)
         if contact.channel == "phone"
-        else _email_lines(contact)
+        else _email_lines(case, contact)
     )
     return "\n".join([*_header(case, contact), "", *body]) + "\n"
 
@@ -262,7 +320,7 @@ def _contact_payload(case: Case, contact: Contact, *, utterances: bool) -> dict[
             {
                 "speaker": t["speaker"],
                 "text": t["content"],
-                **{k: t[k] for k in ("start_s", "end_s", "hold_s") if k in t},
+                **{k: t[k] for k in ("start_s", "end_s", "hold_s", "sent_at") if k in t},
             }
             for t in contact.turns
         ]

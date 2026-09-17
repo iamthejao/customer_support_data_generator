@@ -1,10 +1,10 @@
--- Contact channel and call timing on resolutions (phone-call transcripts).
+-- Contact channel and timing on resolutions (phone calls and email threads).
 --
 -- `channel` mirrors incoming_requests.channel so a resolution row is
 -- self-describing. `started_at` is the deterministic, seeded contact time
--- (see csfd.calls.schedule_first_contact); `ended_at` / `duration_s` are
--- estimated from the transcript for phone calls and stay NULL for email.
--- Per-utterance offsets live inside turns_json (`start_s` / `end_s`).
+-- (see csfd.calls). `ended_at` / `duration_s` are the end of the call or the
+-- last email's sent time. Per-message timing lives inside turns_json:
+-- `start_s` / `end_s` offsets for phone, `sent_at` timestamps for email.
 -- `end_reason` records how the dialogue loop ended (customer_done /
 -- agent_done / cap_hit) for every channel.
 

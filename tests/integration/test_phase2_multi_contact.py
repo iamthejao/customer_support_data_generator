@@ -12,7 +12,7 @@ from csfd.graph.phase2_graph import build_phase2_subgraph
 from csfd.models.fake import FakeChatModel
 from csfd.pipeline import ConsistencyVerdict, DialogueTurnOutput, IncomingRequestOutput
 from csfd.rounds import plan_case_rounds
-from csfd.settings import AppSettings, RoundsConfig
+from csfd.settings import AppSettings, Channel, RoundsConfig
 from csfd.storage.db import Database
 from csfd.storage.transcripts import export_run_transcripts
 from tests.integration import _dialogue_harness as h
@@ -32,7 +32,12 @@ def _turn(
 
 
 def _run(
-    tmp_path: Path, rounds: RoundsConfig, turns: list[DialogueTurnOutput], *, validation: bool
+    tmp_path: Path,
+    rounds: RoundsConfig,
+    turns: list[DialogueTurnOutput],
+    *,
+    validation: bool,
+    channel: Channel = "phone",
 ) -> tuple[Database, AppSettings, FakeChatModel]:
     fake = FakeChatModel(
         structured={ConsistencyVerdict: ConsistencyVerdict(status="pass")},
@@ -50,14 +55,14 @@ def _run(
     )
     db = h.setup_db(tmp_path)
     settings = h.build_settings(
-        tmp_path, validation_enabled=validation, max_retries=0, channel="phone", rounds=rounds
+        tmp_path, validation_enabled=validation, max_retries=0, channel=channel, rounds=rounds
     )
     graph = build_phase2_subgraph(factory=h.factory(fake), db=db, settings=settings)
     asyncio.run(graph.ainvoke(h.initial_state(settings)))
     return db, settings, fake
 
 
-def _follow_up_then_resolved(tmp_path: Path) -> Database:
+def _follow_up_then_resolved(tmp_path: Path, channel: Channel = "phone") -> Database:
     rounds = RoundsConfig(proportions={2: 1.0}, callback_reasons={"follow_up": 1.0})
     turns = [
         # call 1: agreed next step, case stays open
@@ -67,7 +72,7 @@ def _follow_up_then_resolved(tmp_path: Path) -> Database:
         _turn("agent", "Thanks for calling back. Let's replace the PSU cable then."),
         _turn("customer", "New cable is in, it's stable now. Thanks!", "customer_satisfied"),
     ]
-    db, _, _ = _run(tmp_path, rounds, turns, validation=True)
+    db, _, _ = _run(tmp_path, rounds, turns, validation=True, channel=channel)
     return db
 
 
@@ -216,3 +221,43 @@ def test_single_contact_default_keeps_trace_inputs_unchanged(tmp_path: Path) -> 
     assert all("round" not in i and "case_history" not in i for i in inputs)
     (row,) = h.resolution_rows(db)
     assert (row["case_uid"], row["round_index"], row["round_count"]) == (TICKET_UID, 1, 1)
+
+
+def test_email_case_is_a_series_of_dated_threads(tmp_path: Path) -> None:
+    db = _follow_up_then_resolved(tmp_path, channel="email")
+    first, second = h.resolution_rows(db)
+    assert (first["channel"], second["channel"]) == ("email", "email")
+    # Email opens with the customer's message: no scripted greeting.
+    assert first["turns"][0] == {
+        "speaker": "customer",
+        "content": "Hi, it power-cycles.",
+        "done": False,
+        "done_reason": None,
+        "sent_at": first["started_at"],
+    }
+    for row in (first, second):
+        sent = [datetime.fromisoformat(t["sent_at"]) for t in row["turns"]]
+        assert sent == sorted(sent)
+        assert row["ended_at"] == row["turns"][-1]["sent_at"]
+        assert row["duration_s"] == (sent[-1] - sent[0]).total_seconds()
+        assert "start_s" not in row["turns"][0]
+    # The first thread is over before the follow-up thread starts.
+    assert datetime.fromisoformat(first["ended_at"]) < datetime.fromisoformat(second["started_at"])
+
+    out = tmp_path / "exports"
+    export_run_transcripts(db, h.RUN_ID, out_dir=out)
+    case_dir = out / h.RUN_ID / "transcripts" / "case_000001"
+    assert sorted(p.name for p in case_dir.iterdir()) == [
+        "case.json",
+        "email_01.txt",
+        "email_02.txt",
+    ]
+    text = (case_dir / "email_02.txt").read_text()
+    assert text.startswith("EMAIL THREAD\n")
+    assert "thread: 2 of 2" in text
+    assert "since_previous_thread: " in text
+    assert "Subject: Callback: still power-cycling\n" in text
+    assert "Subject: Re: Callback: still power-cycling\n" in text
+    assert "From: Agent-docs_request-0001-r2, " in text
+    assert "wrote:\n> Hi, I called earlier, I reseated it and it still restarts." in text
+    assert "Date: " in text

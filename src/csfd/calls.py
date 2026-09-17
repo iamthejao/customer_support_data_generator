@@ -1,10 +1,11 @@
-"""Deterministic helpers for phone-call style conversations.
+"""Deterministic contact metadata for phone calls and email threads.
 
-The LLM agents write only what each speaker says. Everything a telephony system
-would record around the words — when the call started, the agent's scripted
-greeting, and when each utterance starts and ends — is derived here from the
-text plus a seeded RNG (see :func:`csfd.utils.rng.derive_rng`), never from the
-wall clock and never asked of the model:
+The LLM agents write only what each speaker says. Everything a telephony or
+mail system would record around the words — when the contact started, the
+agent's scripted greeting, when each utterance starts and ends, when each email
+was sent — is derived here from the text plus a seeded RNG (see
+:func:`csfd.utils.rng.derive_rng`), never from the wall clock and never asked
+of the model:
 
 * :func:`schedule_first_contact` / :func:`schedule_next_contact` — weekday,
   business-hours start times for a case's first and follow-up contacts.
@@ -12,6 +13,7 @@ wall clock and never asked of the model:
   set of call-center scripts.
 * :func:`estimate_turn_timings` — per-utterance offsets from word counts, a
   speaking rate, response latencies, and the transcript tags below.
+* :func:`estimate_email_times` — a sent time per message of an email thread.
 
 Transcript tags the phone prompts may emit (and nothing else in brackets):
 
@@ -40,6 +42,11 @@ _RESPONSE_LATENCY_S = (0.3, 1.5)
 _INTERRUPT_OVERLAP_S = (0.2, 0.8)
 _HOLD_S = (30.0, 180.0)
 _PAUSE_S = (1.5, 4.0)
+# Minutes before the next email in a thread (log-uniform): support answers
+# within hours, customers take a little longer.
+_EMAIL_REPLY_MIN = {"agent": (5.0, 240.0), "customer": (3.0, 480.0)}
+# An email thread planned before another contact ends within this share of the gap.
+_EMAIL_DEADLINE_SHARE = 0.8
 
 HOLD_TAG = "[hold]"
 _TAG_RE = re.compile(r"\[(?:hold|pause|inaudible|crosstalk)\]", re.IGNORECASE)
@@ -111,7 +118,11 @@ def schedule_next_contact(
     """
     lo, hi = gap_hours
     gap = math.exp(rng.uniform(math.log(lo), math.log(hi)))
-    at = previous_start + timedelta(hours=gap)
+    return _roll_into_business_hours(previous_start + timedelta(hours=gap), calendar, rng)
+
+
+def _roll_into_business_hours(at: datetime, calendar: CalendarConfig, rng: Random) -> datetime:
+    """Keep ``at`` if it is in business hours, else move it to the next business morning."""
     morning_jitter = timedelta(minutes=rng.randrange(90), seconds=rng.randrange(60))
     if _in_business_hours(at, calendar):
         return at
@@ -120,6 +131,34 @@ def schedule_next_contact(
     while not _is_business_day(day):
         day += timedelta(days=1)
     return day.replace(hour=open_h, minute=0, second=0, microsecond=0) + morning_jitter
+
+
+def estimate_email_times(
+    speakers: Sequence[str],
+    *,
+    started_at: datetime,
+    calendar: CalendarConfig,
+    rng: Random,
+    next_contact_at: datetime | None = None,
+) -> list[datetime]:
+    """Sent time of each message in an email thread, starting at ``started_at``.
+
+    Each reply follows the previous message after a log-uniform delay and is
+    moved into business hours. When another contact of the same case is planned
+    at ``next_contact_at``, the thread is compressed to finish well before it,
+    so contacts never interleave and planned start times stay untouched.
+    """
+    sent = [started_at]
+    for speaker in speakers[1:]:
+        lo, hi = _EMAIL_REPLY_MIN.get(speaker, _EMAIL_REPLY_MIN["customer"])
+        delay = timedelta(minutes=math.exp(rng.uniform(math.log(lo), math.log(hi))))
+        sent.append(_roll_into_business_hours(sent[-1] + delay, calendar, rng))
+    if next_contact_at is not None and len(sent) > 1:
+        budget = (next_contact_at - started_at) * _EMAIL_DEADLINE_SHARE
+        span = sent[-1] - started_at
+        if span > budget:
+            sent = [started_at + (t - started_at) * (budget / span) for t in sent]
+    return [t.replace(microsecond=0) for t in sent]
 
 
 def _daypart(at: datetime) -> str:

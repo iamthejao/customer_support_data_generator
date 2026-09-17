@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from csfd.calls import (
+    estimate_email_times,
     estimate_turn_timings,
     format_offset,
     schedule_first_contact,
@@ -93,3 +94,36 @@ def test_turn_timings_hold_pause_and_interruption() -> None:
 def test_format_offset() -> None:
     assert format_offset(0) == "00:00:00"
     assert format_offset(3725.9) == "01:02:05"
+
+
+def test_email_times_are_ordered_in_hours_and_deterministic() -> None:
+    cal = CalendarConfig()
+    start = datetime(2026, 1, 9, 16, 50, tzinfo=UTC)  # Friday late afternoon
+    speakers = ["customer", "agent", "customer", "agent", "customer", "agent"]
+    times = estimate_email_times(speakers, started_at=start, calendar=cal, rng=derive_rng(5, "e"))
+    assert times[0] == start
+    assert times == sorted(times)
+    assert len(times) == len(speakers)
+    for t in times[1:]:
+        assert t.weekday() < 5
+        assert 8 <= t.hour < 18
+    assert times == estimate_email_times(
+        speakers, started_at=start, calendar=cal, rng=derive_rng(5, "e")
+    )
+
+
+def test_email_thread_is_compressed_before_the_next_contact() -> None:
+    start = datetime(2026, 1, 6, 9, 0, tzinfo=UTC)
+    nxt = start + timedelta(hours=3)
+    speakers = ["customer", "agent"] * 6
+    for seed in range(20):
+        times = estimate_email_times(
+            speakers,
+            started_at=start,
+            calendar=CalendarConfig(),
+            rng=derive_rng(seed, "e"),
+            next_contact_at=nxt,
+        )
+        assert times[0] == start
+        assert times == sorted(times)
+        assert times[-1] <= start + timedelta(hours=3) * 0.8
