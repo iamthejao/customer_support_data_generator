@@ -134,10 +134,6 @@ class RoundsConfig(BaseModel):
             raise ValueError("rounds.gap_hours must satisfy 1 <= min <= max")
         return v
 
-    @property
-    def max_rounds(self) -> int:
-        return max(k for k, w in self.proportions.items() if w > 0)
-
 
 class TicketsConfig(BaseModel):
     total: int = 100
