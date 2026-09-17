@@ -16,7 +16,7 @@ from textwrap import dedent
 
 import pytest
 
-from csfd.settings import load_settings
+from csfd.settings import EmbeddingConfig, load_settings
 
 # ---- Synthetic YAML helpers --------------------------------------------------
 
@@ -215,13 +215,20 @@ def test_real_default_yaml_loads_and_satisfies_structural_invariants() -> None:
     assert types <= set(s.tickets.tone_proportions_per_type)
 
 
-def test_default_embedding_block_is_disabled() -> None:
-    settings = load_settings(default_path="config/default.yaml")
-    assert settings.embedding.enabled is False
-    assert settings.embedding.provider == "openai_compat"
-    assert settings.embedding.base_url == "http://localhost:11434/v1"
-    assert settings.embedding.model == "embeddinggemma:300m"
-    assert settings.embedding.dim == 768
-    assert settings.embedding.threshold == pytest.approx(0.85)
-    assert settings.embedding.text_template == "title_summary"
-    assert settings.embedding.timeout_s == 30
+def test_embedding_config_schema_default_is_disabled() -> None:
+    """EmbeddingConfig's own default is disabled and needs no running service.
+
+    This asserts the schema/code default directly, not the shipped
+    ``config/default.yaml`` (which deliberately enables embeddings), so it
+    stays green regardless of that product config and never depends on a
+    running embedding service.
+    """
+    embedding = EmbeddingConfig()
+    assert embedding.enabled is False
+    assert embedding.provider == "openai_compat"
+    assert embedding.base_url == "http://localhost:11434/v1"
+    assert embedding.model == "embeddinggemma:300m"
+    assert embedding.dim == 768
+    assert embedding.threshold == pytest.approx(0.85)
+    assert embedding.text_template == "title_summary"
+    assert embedding.timeout_s == 30
