@@ -25,6 +25,7 @@ from csfd.settings import (
     AgentLLMConfig,
     AppSettings,
     BudgetConfig,
+    Channel,
     DialogueConfig,
     ObservabilityConfig,
     PipelineConfig,
@@ -41,7 +42,12 @@ RUN_ID = "test-run"
 
 
 def build_settings(
-    tmp_path: Path, *, validation_enabled: bool, max_retries: int = 0, turn_cap: int = 20
+    tmp_path: Path,
+    *,
+    validation_enabled: bool,
+    max_retries: int = 0,
+    turn_cap: int = 20,
+    channel: Channel = "email",
 ) -> AppSettings:
     return AppSettings(
         pipeline=PipelineConfig(version="test", run_seed=7, budget=BudgetConfig()),
@@ -59,6 +65,7 @@ def build_settings(
                 "l2": {"neutral": 1.0},
                 "l3": {"neutral": 1.0},
             },
+            channel=channel,
         ),
         validation=ValidationConfig(enabled=validation_enabled, max_retries=max_retries),
         observability=ObservabilityConfig(),
@@ -142,7 +149,8 @@ def setup_db(tmp_path: Path) -> Database:
 def resolution_row(db: Database) -> dict[str, Any]:
     with db.connect() as conn:
         r = conn.execute(
-            "SELECT turns_json, turn_count, resolved, quality_flag "
+            "SELECT turns_json, turn_count, resolved, quality_flag, channel, agent_name, "
+            "end_reason, started_at, ended_at, duration_s "
             "FROM resolutions WHERE run_id = ?",
             (RUN_ID,),
         ).fetchone()
@@ -151,6 +159,12 @@ def resolution_row(db: Database) -> dict[str, Any]:
         "turn_count": int(r["turn_count"]),
         "resolved": bool(r["resolved"]),
         "quality_flag": r["quality_flag"],
+        "channel": r["channel"],
+        "agent_name": r["agent_name"],
+        "end_reason": r["end_reason"],
+        "started_at": r["started_at"],
+        "ended_at": r["ended_at"],
+        "duration_s": r["duration_s"],
     }
 
 

@@ -584,6 +584,43 @@ class ResolutionRecord:
     resolved: bool
     quality_flag: str | None
     created_at: datetime
+    channel: str = "email"
+    agent_name: str | None = None
+    end_reason: str | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    duration_s: float | None = None
+
+
+def _resolution_params(r: ResolutionRecord) -> tuple[Any, ...]:
+    return (
+        r.resolution_uid,
+        r.run_id,
+        r.incoming_request_id,
+        r.problem_id,
+        r.ticket_type,
+        json.dumps(r.turns, ensure_ascii=False),
+        r.turn_count,
+        1 if r.resolved else 0,
+        r.quality_flag,
+        r.created_at.isoformat(),
+        r.channel,
+        r.agent_name,
+        r.end_reason,
+        r.started_at.isoformat() if r.started_at else None,
+        r.ended_at.isoformat() if r.ended_at else None,
+        r.duration_s,
+    )
+
+
+_RESOLUTION_INSERT_SQL = """
+    INSERT OR IGNORE INTO resolutions
+      (resolution_uid, run_id, incoming_request_id, problem_id,
+       ticket_type, turns_json, turn_count, resolved,
+       quality_flag, created_at, channel, agent_name, end_reason,
+       started_at, ended_at, duration_s)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
 
 
 class ResolutionRepo:
@@ -597,27 +634,7 @@ class ResolutionRepo:
         row's id is returned.
         """
         with self.db.connect() as conn:
-            cur = conn.execute(
-                """
-                INSERT OR IGNORE INTO resolutions
-                  (resolution_uid, run_id, incoming_request_id, problem_id,
-                   ticket_type, turns_json, turn_count, resolved,
-                   quality_flag, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    r.resolution_uid,
-                    r.run_id,
-                    r.incoming_request_id,
-                    r.problem_id,
-                    r.ticket_type,
-                    json.dumps(r.turns, ensure_ascii=False),
-                    r.turn_count,
-                    1 if r.resolved else 0,
-                    r.quality_flag,
-                    r.created_at.isoformat(),
-                ),
-            )
+            cur = conn.execute(_RESOLUTION_INSERT_SQL, _resolution_params(r))
             if cur.lastrowid:
                 return int(cur.lastrowid)
             row = conn.execute(
@@ -629,27 +646,7 @@ class ResolutionRepo:
     async def acreate(self, adb: AsyncDatabase, r: ResolutionRecord) -> int:
         """Async sibling of :meth:`create`. Returns the inserted-or-existing row id."""
         async with adb.connect() as conn:
-            cur = await conn.execute(
-                """
-                INSERT OR IGNORE INTO resolutions
-                  (resolution_uid, run_id, incoming_request_id, problem_id,
-                   ticket_type, turns_json, turn_count, resolved,
-                   quality_flag, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    r.resolution_uid,
-                    r.run_id,
-                    r.incoming_request_id,
-                    r.problem_id,
-                    r.ticket_type,
-                    json.dumps(r.turns, ensure_ascii=False),
-                    r.turn_count,
-                    1 if r.resolved else 0,
-                    r.quality_flag,
-                    r.created_at.isoformat(),
-                ),
-            )
+            cur = await conn.execute(_RESOLUTION_INSERT_SQL, _resolution_params(r))
             if cur.lastrowid:
                 return int(cur.lastrowid)
             cur2 = await conn.execute(

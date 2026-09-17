@@ -65,6 +65,8 @@ class _PlanSlot(BaseModel):
     ticket_type: TicketType
     tier: str
     tone: str
+    # Seeded contact time (see csfd.calls.schedule_first_contact).
+    started_at: datetime | None = None
 
 
 class PipelineState(BaseModel):
@@ -145,10 +147,10 @@ async def init_run_node(
             git_sha=current_git_sha(),
             config_snapshot_json=json.dumps(
                 {
-                    "problem_database": settings.problem_database.model_dump(),
-                    "tickets": settings.tickets.model_dump(),
-                    "validation": settings.validation.model_dump(),
-                    "embedding": settings.embedding.model_dump(),
+                    "problem_database": settings.problem_database.model_dump(mode="json"),
+                    "tickets": settings.tickets.model_dump(mode="json"),
+                    "validation": settings.validation.model_dump(mode="json"),
+                    "embedding": settings.embedding.model_dump(mode="json"),
                 },
                 ensure_ascii=False,
             ),

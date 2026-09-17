@@ -13,7 +13,10 @@ information-asymmetric agents:
 
 Turn 1 is the customer's opening message (the standalone incoming request).
 Turns then alternate, starting with the service agent, until whichever speaker
-just spoke flags ``done`` — or a hard ``dialogue.turn_cap`` is reached. A
+just spoke flags ``done`` — or a hard ``dialogue.turn_cap`` is reached. With
+``tickets.channel == "phone"`` the same loop runs on the ``phone_*`` prompts:
+turn 1 is the agent's scripted greeting (see :mod:`csfd.calls`), turn 2 the
+caller's opening, and per-utterance timings are estimated at commit. A
 consistency agent then reviews the full transcript and may pass it, pass it
 with edits, or fail it (a fail re-rolls the whole conversation within the
 existing retry budget). The subgraph shares
@@ -59,7 +62,7 @@ Subgraph topology:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any, Literal
 
@@ -70,6 +73,7 @@ from csfd.agents.base import AgentContext, Issue, Verdict
 from csfd.agents.factory import AgentFactory
 from csfd.agents.tracing import ParentLink, TracingAdapter
 from csfd.allocator import ProblemRef, build_allocation_plan
+from csfd.calls import estimate_turn_timings, schedule_first_contact, scripted_greeting
 from csfd.graph.pipeline_graph import PipelineState, _PlanSlot
 from csfd.pipeline import (
     ConsistencyVerdict,
@@ -91,6 +95,7 @@ from csfd.storage.repository import (
     ResolutionRepo,
 )
 from csfd.ticket_types.definitions import ProblemComplexity
+from csfd.utils.rng import derive_rng
 
 # --------------------------------------------------------------------------- #
 # Input builders (enforce information asymmetry at the prompt boundary)
@@ -102,13 +107,27 @@ def _render_history(turns: list[DialogueTurnOutput]) -> list[dict[str, str]]:
     return [{"speaker": t.speaker, "content": t.content} for t in turns]
 
 
+def _customer_name(slot: _PlanSlot) -> str:
+    return f"Customer-{slot.tier}-{slot.index:04d}"
+
+
+def _agent_name(slot: _PlanSlot) -> str:
+    return f"Agent-{slot.ticket_type.value}-{slot.index:04d}"
+
+
+def _prompt_name(settings: AppSettings, base: str) -> str:
+    """Resolve a Phase 2 prompt for the configured channel (``phone_*`` variants)."""
+    prefix = "phone_" if settings.tickets.channel == "phone" else ""
+    return f"phase2.{prefix}{base}"
+
+
 def _customer_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
     """Customer-view inputs: symptoms + impact + persona only. No root cause."""
     problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
     return {
         "company_name": state.company.name,
         "ticket_type": slot.ticket_type.value,
-        "customer_name": f"Customer-{slot.tier}-{slot.index:04d}",
+        "customer_name": _customer_name(slot),
         "customer_tier": slot.tier,
         "customer_tone": slot.tone,
         "symptoms": problem.symptoms,
@@ -124,7 +143,7 @@ def _agent_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
     return {
         "company_name": state.company.name,
         "ticket_type": slot.ticket_type.value,
-        "agent_name": f"Agent-{slot.ticket_type.value}-{slot.index:04d}",
+        "agent_name": _agent_name(slot),
         "problem": {
             "title": problem.title,
             "summary": problem.summary,
@@ -183,6 +202,7 @@ async def build_allocation_plan_node(
             ),
         )
 
+    seed = settings.pipeline.run_seed or 0
     pydantic_slots = [
         _PlanSlot(
             index=s.index,
@@ -190,6 +210,9 @@ async def build_allocation_plan_node(
             ticket_type=s.ticket_type,
             tier=s.tier,
             tone=s.tone,
+            started_at=schedule_first_contact(
+                tickets_cfg.calendar, derive_rng(seed, f"contact:{s.index}:schedule")
+            ),
         )
         for s in plan.slots
     ]
@@ -208,15 +231,31 @@ async def generate_incoming_request_node(
     adb: AsyncDatabase,
     settings: AppSettings,
 ) -> dict[str, Any]:
-    """LLM call: customer's opening message. Seeds turn 1 (customer)."""
+    """LLM call: customer's opening message. Seeds turn 1 (customer).
+
+    On the phone channel the agent's scripted greeting is prepended as turn 1
+    (no LLM call) and the caller's opening becomes turn 2.
+    """
     slot = state.plan_slots[state.slot_index]
     ticket_uid = f"{state.run_id}:{slot.index:06d}"
     inputs = _customer_inputs(state, slot)
+    opening: list[DialogueTurnOutput] = []
+    if settings.tickets.channel == "phone":
+        assert slot.started_at is not None, "build_allocation_plan must schedule the call"
+        greeting = scripted_greeting(
+            company=state.company.name,
+            agent=_agent_name(slot),
+            at=slot.started_at,
+            rng=derive_rng(state.run_seed, f"contact:{slot.index}:greeting"),
+        )
+        opening.append(DialogueTurnOutput(speaker="agent", content=greeting, done=False))
+        inputs["agent_greeting"] = greeting
+        inputs["disfluency"] = settings.tickets.phone.disfluency
 
     link = ParentLink()
     generator = factory.build_generator(
         name="incoming_request_generator",
-        prompt_name="phase2.incoming_request",
+        prompt_name=_prompt_name(settings, "incoming_request"),
         output_schema_factory=lambda: IncomingRequestOutput,
     )
     traced = TracingAdapter(
@@ -232,10 +271,10 @@ async def generate_incoming_request_node(
     )
     result = await traced.invoke(AgentContext(inputs=inputs, retry_attempt=state.retry_attempt))
     assert isinstance(result, IncomingRequestOutput)
-    turn0 = DialogueTurnOutput(speaker="customer", content=result.body, done=False)
+    opening.append(DialogueTurnOutput(speaker="customer", content=result.body, done=False))
     return {
         "current_resolution_draft": ResolutionOutput(subject=result.subject, body=result.body),
-        "current_dialogue_turns": [turn0],
+        "current_dialogue_turns": opening,
         "dialogue_last_speaker": "customer",
         "dialogue_done": False,
         "dialogue_end_reason": None,
@@ -249,19 +288,24 @@ async def _generate_turn(
     factory: AgentFactory,
     db: Database,
     adb: AsyncDatabase,
+    settings: AppSettings,
     speaker: Literal["customer", "agent"],
 ) -> dict[str, Any]:
     """Shared body for the customer / agent turn nodes: one LLM call, one appended turn."""
     slot = state.plan_slots[state.slot_index]
     ticket_uid = f"{state.run_id}:{slot.index:06d}"
     if speaker == "customer":
-        node_name, prompt_name = "customer_turn_generator", "phase2.customer_turn"
+        node_name = "customer_turn_generator"
+        prompt_name = _prompt_name(settings, "customer_turn")
         inputs = _customer_inputs(state, slot)
     else:
-        node_name, prompt_name = "agent_turn_generator", "phase2.agent_turn"
+        node_name = "agent_turn_generator"
+        prompt_name = _prompt_name(settings, "agent_turn")
         inputs = _agent_inputs(state, slot)
     inputs["conversation_so_far"] = _render_history(state.current_dialogue_turns)
     inputs["turn_index"] = len(state.current_dialogue_turns) + 1
+    if settings.tickets.channel == "phone":
+        inputs["disfluency"] = settings.tickets.phone.disfluency
     # On a re-roll, surface the prior consistency issues to the agent so it can
     # avoid repeating them. Only the agent turn receives them (it drives diagnosis).
     prior_issues = (
@@ -317,7 +361,9 @@ async def generate_agent_turn_node(
     settings: AppSettings,
 ) -> dict[str, Any]:
     """LLM call: one service-agent turn."""
-    return await _generate_turn(state, factory=factory, db=db, adb=adb, speaker="agent")
+    return await _generate_turn(
+        state, factory=factory, db=db, adb=adb, settings=settings, speaker="agent"
+    )
 
 
 async def generate_customer_turn_node(
@@ -329,7 +375,9 @@ async def generate_customer_turn_node(
     settings: AppSettings,
 ) -> dict[str, Any]:
     """LLM call: one customer turn."""
-    return await _generate_turn(state, factory=factory, db=db, adb=adb, speaker="customer")
+    return await _generate_turn(
+        state, factory=factory, db=db, adb=adb, settings=settings, speaker="customer"
+    )
 
 
 async def validate_conversation_node(
@@ -350,6 +398,7 @@ async def validate_conversation_node(
     problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
     inputs: dict[str, Any] = {
         "company_name": state.company.name,
+        "channel": settings.tickets.channel,
         "customer_tone": slot.tone,
         "problem": {
             "title": problem.title,
@@ -414,11 +463,32 @@ async def validate_conversation_node(
     }
 
 
+def _timed_turns(
+    state: PipelineState, slot: _PlanSlot, turns: list[DialogueTurnOutput]
+) -> tuple[list[dict[str, Any]], float]:
+    """Attach estimated per-utterance offsets to phone turns; return (turns, duration_s).
+
+    Timing is computed here, after any consistency edits, and never lives on
+    ``DialogueTurnOutput`` so the LLM is not asked to produce it.
+    """
+    timings = estimate_turn_timings(
+        [t.content for t in turns], derive_rng(state.run_seed, f"contact:{slot.index}:timing")
+    )
+    out: list[dict[str, Any]] = []
+    for turn, timing in zip(turns, timings, strict=True):
+        row = {**turn.model_dump(), "start_s": timing.start_s, "end_s": timing.end_s}
+        if timing.hold_s:
+            row["hold_s"] = timing.hold_s
+        out.append(row)
+    return out, max((t.end_s for t in timings), default=0.0)
+
+
 async def commit_dialogue_node(
     state: PipelineState,
     *,
     db: Database,
     adb: AsyncDatabase,
+    settings: AppSettings,
 ) -> dict[str, Any]:
     """Persist incoming request + resolution, backfill lineage, reset per-slot state."""
     slot = state.plan_slots[state.slot_index]
@@ -427,7 +497,15 @@ async def commit_dialogue_node(
     draft = state.current_resolution_draft
 
     problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
-    customer_name = f"Customer-{slot.tier}-{slot.index:04d}"
+    customer_name = _customer_name(slot)
+    channel = settings.tickets.channel
+    turns: list[dict[str, Any]] = [t.model_dump() for t in draft.turns]
+    ended_at: datetime | None = None
+    duration_s: float | None = None
+    if channel == "phone":
+        turns, duration_s = _timed_turns(state, slot, draft.turns)
+        if slot.started_at is not None:
+            ended_at = slot.started_at + timedelta(seconds=duration_s)
 
     ir_id = await IncomingRequestRepo(db).acreate(
         adb,
@@ -439,7 +517,7 @@ async def commit_dialogue_node(
             customer_name=customer_name,
             customer_tier=slot.tier,
             customer_tone=slot.tone,
-            channel="email",
+            channel=channel,
             subject=draft.subject,
             body=draft.body,
             quality_flag=state.last_quality_flag,
@@ -454,11 +532,17 @@ async def commit_dialogue_node(
             incoming_request_id=ir_id,
             problem_id=problem.id,
             ticket_type=slot.ticket_type.value,
-            turns=[t.model_dump() for t in draft.turns],
+            turns=turns,
             turn_count=len(draft.turns),
             resolved=draft.resolved,
             quality_flag=state.last_quality_flag,
             created_at=datetime.now(UTC),
+            channel=channel,
+            agent_name=_agent_name(slot),
+            end_reason=draft.end_reason,
+            started_at=slot.started_at,
+            ended_at=ended_at,
+            duration_s=duration_s,
         ),
     )
     await LineageRepo(db).aupdate_links(
@@ -618,7 +702,7 @@ def build_phase2_subgraph(
         "validate_conversation",
         partial(validate_conversation_node, factory=factory, db=db, adb=adb, settings=settings),
     )
-    g.add_node("commit_dialogue", partial(commit_dialogue_node, db=db, adb=adb))
+    g.add_node("commit_dialogue", partial(commit_dialogue_node, db=db, adb=adb, settings=settings))
     g.add_node("_bump_retry", _bump_retry_node)
     g.add_node("_mark_exhausted", _mark_exhausted_node)
     g.add_node("_mark_validation_skipped", _mark_validation_skipped_node)

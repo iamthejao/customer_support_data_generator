@@ -27,6 +27,12 @@ Checks (flag and, where fixable by light editing, correct in place):
 - (d) Tone is consistent with {{ inputs.customer_tone }} across all customer turns.
 - (e) No contradictions between turns.
 - (f) `end_reason` and the implied resolution match what the conversation actually achieved.
+{%- if inputs.channel == "phone" %}
+This is a phone-call transcript: `subject` is the logged reason for the call, turn 1 is the agent's scripted greeting, and `body` is the caller's first spoken turn. Also check:
+- (g) Every turn reads as speech, not writing: no email greetings or sign-offs, lists, or URLs read out.
+- (h) Bracketed tags are limited to `[hold]` (only at the start of an agent turn, after the caller agreed to hold), `[pause]`, and `[inaudible]`; `--` marks a cut-off. Remove any other tags, timestamps, or speaker labels inside turns.
+- (i) Filler words, restarts, and self-corrections are intentional. Keep them; do not tidy the speech into written prose.
+{%- endif %}
 
 Output contract — return:
 - `status`: "pass", "pass_with_edits", or "fail".

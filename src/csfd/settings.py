@@ -8,11 +8,12 @@ time rather than at runtime.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,6 +53,38 @@ class DialogueConfig(BaseModel):
     turn_cap: int = 20
 
 
+Channel = Literal["email", "phone"]
+Disfluency = Literal["none", "light", "moderate"]
+
+
+class PhoneConfig(BaseModel):
+    """Spoken-style controls, used only when ``tickets.channel == "phone"``."""
+
+    disfluency: Disfluency = "light"
+
+
+class CalendarConfig(BaseModel):
+    """Deterministic wall-clock placement of contacts.
+
+    Start times are derived from ``start`` plus seeded offsets, never from the
+    current clock, so the same config and seed place every contact at the same
+    timestamp. Contacts fall on weekdays within ``business_hours`` (local hours
+    in ``start``'s timezone).
+    """
+
+    start: datetime = datetime(2026, 1, 5, 8, 0, tzinfo=UTC)
+    span_days: int = Field(default=20, ge=1)
+    business_hours: tuple[int, int] = (8, 18)
+
+    @field_validator("business_hours")
+    @classmethod
+    def _check_business_hours(cls, v: tuple[int, int]) -> tuple[int, int]:
+        open_h, close_h = v
+        if not 0 <= open_h < close_h <= 24:
+            raise ValueError("business_hours must satisfy 0 <= open < close <= 24")
+        return v
+
+
 class TicketsConfig(BaseModel):
     total: int = 100
     type_proportions: dict[str, float]
@@ -59,6 +92,9 @@ class TicketsConfig(BaseModel):
     dialogue: DialogueConfig = Field(default_factory=DialogueConfig)
     tier_proportions: dict[str, float]
     tone_proportions_per_type: dict[str, dict[str, float]]
+    channel: Channel = "email"
+    phone: PhoneConfig = Field(default_factory=PhoneConfig)
+    calendar: CalendarConfig = Field(default_factory=CalendarConfig)
 
 
 class ValidationConfig(BaseModel):

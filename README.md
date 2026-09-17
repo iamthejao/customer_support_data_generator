@@ -23,6 +23,7 @@ Each run produces a benchmark-ready dataset with separate artifacts for causes, 
 - **`lineage`** — the join table that links each ticket slot to its originating problem, request, and resolution. This makes evaluation slices explainable: every benchmark example can be traced back to the root cause and configured distribution slot.
 - **`agent_traces`** — one audit row per LLM call, including prompt version, model/provider metadata, latency, checker verdicts, and parent-child links between generation and validation. Use this to debug output quality and compare runs.
 - **`manifest.json`** — export metadata and file checksums for the generated JSONL/Parquet artifacts. Use it to pin a dataset version in downstream benchmarks.
+- **`transcripts/`** — the same conversations rendered as plain-text transcripts, one folder per case (`csfd export --format transcripts`). With `tickets.channel: phone` these are call transcripts with speaker labels, timestamps, and call metadata, ready to feed a pipeline that consumes call transcriptions. See [Phone-call transcripts](#phone-call-transcripts).
 
 Together, these datasets support both online-style evaluation, where only `incoming_requests` are shown to a system under test, and offline analysis, where `problems`, `resolutions`, `lineage`, and traces explain why each example exists and how it was generated.
 
@@ -47,7 +48,7 @@ YAML that controls the deterministic shape of the run — counts, proportions, r
   - `pipeline` — `version`, `run_seed`, and the per-run budget (`max_tokens_per_run`, `max_usd_per_run`, `max_retries_per_artifact`).
   - `agents` — the two LLM buckets (`generator` and `combined_checker`) with `provider`, `model`, `temperature`, `max_tokens`, and `timeout_s`. Every node in the graph routes to one of these buckets.
   - `problem_database` — Phase 1 controls: `count` and `complexity_proportions` (simple / medium / complex), applied with largest-remainder rounding.
-  - `tickets` — Phase 2 controls: `total`, `type_proportions`, `tier_proportions`, `tone_proportions_per_type`, `dialogue.turn_cap`, and `assignment_strategy` (`complexity_weighted` or `uniform`). Turn count is **emergent** — the two dialogue agents decide when the conversation is over — so there is no per-type turn target; `dialogue.turn_cap` (default 20) is only a hard safety ceiling that rarely binds.
+  - `tickets` — Phase 2 controls: `total`, `type_proportions`, `tier_proportions`, `tone_proportions_per_type`, `dialogue.turn_cap`, and `assignment_strategy` (`complexity_weighted` or `uniform`). Turn count is **emergent** — the two dialogue agents decide when the conversation is over — so there is no per-type turn target; `dialogue.turn_cap` (default 20) is only a hard safety ceiling that rarely binds. Conversation format: `channel` (`email`, the default, or `phone`), `phone.disfluency` (`none` / `light` / `moderate`), and `calendar` (the fixed start date, span, and business hours that seeded contact times are drawn from).
   - `validation` — whether the combined checker runs after each generation and how its verdict gates retries.
   - `embedding` — opt-in Phase 1 dedup. When `enabled: true`, accepted candidates are embedded via an OpenAI-compatible endpoint (defaults to local Ollama at `http://localhost:11434/v1` with `embeddinggemma:300m`) and rejected if cosine similarity to any already-committed problem in the run meets or exceeds `threshold`. `dim` truncates the model's native vector (Matryoshka); `text_template` selects between `title_summary` and `title_summary_background`.
 - **`config/profiles/*.yaml`** — overlays applied on top of `default.yaml` via `--profile <name>`. Shipped overlays cover model routing (`claude-only`, `claude-cli`, `local-only`, `mixed`) and a small `dev` overlay that shrinks problem/ticket counts for fast iteration.
@@ -83,6 +84,13 @@ csfd generate --seed 42 --problems 10 --tickets 100
 ```
 
 The proportions, turn counts, and assignment strategy live in `config/default.yaml` under the `problem_database`, `tickets`, and `validation` sections. Use `--profile dev` for a small smoke run (`problem_database.count=3`, `tickets.total=6`).
+
+To generate phone calls instead of email tickets, and get them as text transcripts:
+
+```bash
+csfd generate --channel phone --seed 42 --problems 5 --tickets 20   # prints the run id
+csfd export <run_id> --format transcripts                           # data/exports/<run_id>/transcripts/
+```
 
 ## Architecture
 
@@ -185,6 +193,50 @@ A single `csfd generate` invocation walks the parent graph from top to bottom. E
 
 Two invariants hold across the whole walk: every LLM call produces exactly one `agent_traces` row (so cost and quality are auditable per call), and Phase 2 never invents allocation decisions on the fly — the plan from step 9 fully determines what gets generated.
 
+## Phone-call transcripts
+
+`tickets.channel: phone` (or `csfd generate --channel phone`) keeps the pipeline unchanged and swaps the Phase 2 conversation style to spoken calls. The dialogue loop, information asymmetry, consistency review, and allocation plan are identical to the email channel. Only the prompts and the recorded metadata change:
+
+- **Call flow.** Turn 1 is the agent's scripted greeting, picked by seed from a few call-center scripts (no LLM call). Turn 2 is the caller's opening. The `phone_agent_turn` prompt then steers the usual flow: verify who is calling and which machine (model, serial, site), clarify, troubleshoot one step at a time, agree the next step, and close. The call reason the caller gives is logged in `incoming_requests.subject`.
+- **Speech, in moderation.** `tickets.phone.disfluency` (`--disfluency`) controls filler words, restarts, and cut-ins: `none`, `light` (default: occasional), or `moderate`. Callers get more disfluency than agents. The consistency checker is told to keep them rather than tidy the speech into prose.
+- **Transcript tags.** The prompts allow only `[hold]` (at the start of an agent turn, back from a hold the caller agreed to), `[pause]`, `[inaudible]`, and a trailing `--` for a cut-off. They affect timing and rendering. The checker removes any other bracketed tag.
+- **Timing and metadata.** Nothing time-related is asked of the model. Each call's `started_at` is a seeded weekday, business-hours slot inside `tickets.calendar`. At commit, `csfd.calls.estimate_turn_timings` derives per-utterance `start_s` / `end_s` from word counts (about 150 wpm), seeded response latencies, hold gaps (30–180 s), and pauses, and stores them in `turns_json`. `resolutions` records `channel`, `agent_name`, `end_reason`, `started_at`, `ended_at`, and `duration_s`.
+
+`csfd export <run_id> --format transcripts` (or `--format all`) writes a text-first view grouped by case:
+
+```text
+data/exports/<run_id>/transcripts/
+  cases.jsonl              # one line per case: metadata + utterances with start_s/end_s
+  case_000001/
+    case.json              # case metadata: problem_id, tier, tone, per-call timing and outcome
+    call_01.txt            # the transcript (email_01.txt on the email channel)
+```
+
+Each transcript file is a `key: value` header, a blank line, then one line per utterance (`--no-timestamps` drops the `[HH:MM:SS]` prefixes):
+
+```text
+CALL TRANSCRIPT
+case_id: 3f0c…:000001
+call: 1 of 1
+channel: phone (inbound)
+started_at: 2026-01-13T10:42:31+00:00
+ended_at: 2026-01-13T10:44:47.200000+00:00
+duration: 00:02:16
+caller: Customer-premium-0001 (premium tier)
+agent: Agent-l1-0001 (L1 Support)
+
+[00:00:00] AGENT: Thank you for calling CoolTherm support, this is Agent-l1-0001. How can I help you today?
+[00:00:05] CUSTOMER: Hi, yeah, um, our CT-500 at the north site keeps throwing a high-pressure alarm in the afternoons.
+[00:00:12] AGENT: Sorry to hear that. Can I get the serial number off the unit's nameplate?
+[00:00:17] CUSTOMER: Sure, one sec [pause] it's CT5-20417.
+[00:00:26] AGENT: Thanks. Is that alarm clearing on its own, or does someone have to reset it?
+…
+[00:01:02] (caller on hold, 00:00:48)
+[00:01:02] AGENT: Thanks for holding. So that alarm usually points at airflow over the condenser…
+```
+
+The transcript folder deliberately holds no ground truth. Join `case.json`'s `problem_id` against `problems.jsonl` to score a downstream report against the root cause and resolution hints.
+
 ## LangGraph Studio
 
 ```bash
@@ -212,6 +264,8 @@ Every run stamps:
 Determinism guarantee: given identical config and seed, two runs against fresh databases produce slot-by-slot identical lineage rows `(slot_index, problem_index_within_run, ticket_type, customer_tier, customer_tone, customer_name)`. Run-scoped UUIDs (`run_id` and the prefix of `problem_id` / `ticket_uid`) of course differ — the deterministic part is the per-run index suffix. The only source of additional variation are the LLM responses themselves.
 
 Pin an exported benchmark to its provenance via `runs.config_snapshot_json` and the per-row `prompt_id` / `model_id` columns in `agent_traces`.
+
+Contact metadata follows the same rule. Each contact's `started_at` and the phone channel's scripted greeting come from `(run_seed, slot_index)` and `tickets.calendar`, never the wall clock, so they reproduce exactly. Per-utterance timestamps, `ended_at`, and `duration_s` are derived deterministically from the generated text, so they vary only when the text does.
 
 Embedding scores depend on the Ollama model/version and platform: a candidate whose cosine is very close to `embedding.threshold` can flip across Ollama upgrades. The deterministic allocation guarantee (slot-by-slot lineage) is unchanged.
 
@@ -243,6 +297,7 @@ Exports under `data/exports/<run_id>/`:
 - `agent_traces.jsonl(.parquet)` — every LLM call (`prompt_id`, `model_provider`, `model_id`, `attempt`, `latency_ms`, `verdict`)
 - `problem_embeddings.jsonl(.parquet)` — per-problem dedup vector (`problem_id`, `model`, `dim`, deserialized `vector: list[float]`)
 - `manifest.json` — SHA-256 of every JSONL file
+- `transcripts/` — plain-text transcripts grouped by case, plus `case.json` / `cases.jsonl` (only with `--format transcripts` or `--format all`)
 
 ## Configuration profiles
 
@@ -266,7 +321,8 @@ Embedding-based dedup is enabled in `local-only` and `mixed` (which run against 
 | `csfd init` | scaffold `seeds/`, `data/`, `.env.example` |
 | `csfd db-migrate` | apply SQL migrations to `runs.sqlite` |
 | `csfd generate --seed N --problems M --tickets T` | run the deterministic LangGraph pipeline |
-| `csfd export RUN_ID --format jsonl\|parquet\|both` | dump to `data/exports/<run_id>/` |
+| `csfd generate --channel phone [--disfluency none\|light\|moderate]` | generate phone-call transcripts instead of email tickets |
+| `csfd export RUN_ID --format jsonl\|parquet\|both\|transcripts\|all [--no-timestamps]` | dump to `data/exports/<run_id>/` (`both` = JSONL + Parquet; `all` adds transcripts) |
 | `csfd inspect RUN_ID` | print summary stats |
 | `csfd render-graphs` | regenerate `docs/diagrams/*.mmd` |
 

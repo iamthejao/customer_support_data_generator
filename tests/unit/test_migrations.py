@@ -32,7 +32,7 @@ def test_apply_migrations_is_idempotent(tmp_db_path: Path) -> None:
     db = Database(path=tmp_db_path)
     apply_migrations(db)
     apply_migrations(db)
-    assert set(applied_versions(db)) == {"001", "002", "003", "004", "005", "006"}
+    assert set(applied_versions(db)) == {"001", "002", "003", "004", "005", "006", "007"}
 
 
 def test_agent_traces_accepts_claude_code_cli_provider(tmp_db_path: Path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import cast, get_args
 
 import typer
 
@@ -14,7 +15,7 @@ from csfd.pipeline import run_pipeline
 from csfd.prompts.registry import PromptRegistry
 from csfd.seeds.company import parse_company_seed
 from csfd.seeds.scenarios import parse_scenarios_seed
-from csfd.settings import load_settings
+from csfd.settings import Channel, Disfluency, load_settings
 from csfd.storage.db import Database
 from csfd.storage.exporters import export_run_to_jsonl, export_run_to_parquet
 from csfd.storage.migrations.runner import apply_migrations
@@ -25,6 +26,7 @@ from csfd.storage.repository import (
     ResolutionRepo,
     RunRepo,
 )
+from csfd.storage.transcripts import export_run_transcripts
 
 app = typer.Typer(help="Customer-Service Fake Data — synthetic CS ticket generator.")
 
@@ -114,6 +116,14 @@ def _resolve_seed_paths(
     return company, scenarios
 
 
+def _choice(value: str, allowed: object, flag: str) -> str:
+    """Validate a CLI string against the members of a ``Literal`` type."""
+    options: tuple[str, ...] = get_args(allowed)
+    if value not in options:
+        raise typer.BadParameter(f"must be one of: {', '.join(options)}", param_hint=flag)
+    return value
+
+
 @app.command()
 def generate(
     profile: str | None = typer.Option(None, "--profile"),
@@ -123,6 +133,17 @@ def generate(
     seeds_dir: str = typer.Option("seeds", "--seeds-dir"),
     company_seed: str | None = typer.Option(None, "--company-seed"),
     scenarios_seed: str | None = typer.Option(None, "--scenarios-seed"),
+    channel: str | None = typer.Option(
+        None,
+        "--channel",
+        help="Conversation format: 'email' (written tickets) or 'phone' (call transcripts). "
+        "Overrides tickets.channel.",
+    ),
+    disfluency: str | None = typer.Option(
+        None,
+        "--disfluency",
+        help="Phone speech style: none | light | moderate. Overrides tickets.phone.disfluency.",
+    ),
 ) -> None:
     """Run the deterministic, proportion-based pipeline end-to-end.
 
@@ -130,6 +151,10 @@ def generate(
     requests + resolutions according to the configured proportions (Phase 2).
     Prints the single run id covering both phases.
     """
+    channel_choice = cast(Channel, _choice(channel, Channel, "--channel")) if channel else None
+    disfluency_choice = (
+        cast(Disfluency, _choice(disfluency, Disfluency, "--disfluency")) if disfluency else None
+    )
     settings = load_settings(profile=profile)
     configure_logging(json_output=settings.observability.structlog_json)
     # CLI overrides on top of YAML.
@@ -139,6 +164,10 @@ def generate(
         settings.tickets.total = tickets
     if seed is not None:
         settings.pipeline.run_seed = seed
+    if channel_choice is not None:
+        settings.tickets.channel = channel_choice
+    if disfluency_choice is not None:
+        settings.tickets.phone.disfluency = disfluency_choice
     factory = _build_factory(profile)
     db = Database(path=Path(settings.storage.sqlite_path))
     apply_migrations(db)
@@ -167,20 +196,38 @@ def export(
     format: str = typer.Option(
         "jsonl",
         "--format",
-        help="jsonl | parquet | both",
+        help="jsonl | parquet | both (jsonl+parquet) | transcripts | all. "
+        "'transcripts' writes plain-text call/email transcripts grouped by case "
+        "under <out>/<run_id>/transcripts/.",
     ),
     sqlite_path: str = typer.Option("data/runs.sqlite", "--sqlite-path"),
     out: str = typer.Option("data/exports", "--out"),
+    timestamps: bool = typer.Option(
+        True,
+        "--timestamps/--no-timestamps",
+        help="Prefix phone transcript lines with [HH:MM:SS] call offsets.",
+    ),
 ) -> None:
-    """Export a run's artifacts to JSONL and/or Parquet under <out>/<run_id>/."""
+    """Export a run's artifacts to JSONL, Parquet, and/or text transcripts under <out>/<run_id>/."""
+    expansions = {
+        "jsonl": {"jsonl"},
+        "parquet": {"parquet"},
+        "transcripts": {"transcripts"},
+        "both": {"jsonl", "parquet"},
+        "all": {"jsonl", "parquet", "transcripts"},
+    }
+    if format not in expansions:
+        raise typer.BadParameter(f"must be one of: {', '.join(expansions)}", param_hint="--format")
+    formats = expansions[format]
     db = Database(path=Path(sqlite_path))
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    formats = {format} if format != "both" else {"jsonl", "parquet"}
     if "jsonl" in formats:
         export_run_to_jsonl(db, run_id, out_dir=out_dir)
     if "parquet" in formats:
         export_run_to_parquet(db, run_id, out_dir=out_dir)
+    if "transcripts" in formats:
+        export_run_transcripts(db, run_id, out_dir=out_dir, timestamps=timestamps)
     typer.echo(f"Exported run {run_id} to {out_dir / run_id}.")
 
 

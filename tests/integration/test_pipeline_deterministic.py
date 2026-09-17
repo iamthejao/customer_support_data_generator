@@ -31,6 +31,7 @@ from csfd.settings import (
     AgentLLMConfig,
     AppSettings,
     BudgetConfig,
+    Channel,
     DialogueConfig,
     ObservabilityConfig,
     PipelineConfig,
@@ -93,7 +94,9 @@ def _canned_verdict() -> Verdict:
     )
 
 
-def _build_settings(*, tmp_path: Path, total: int = 10, problems: int = 4) -> AppSettings:
+def _build_settings(
+    *, tmp_path: Path, total: int = 10, problems: int = 4, channel: Channel = "email"
+) -> AppSettings:
     sqlite_path = tmp_path / "runs.sqlite"
     return AppSettings(
         pipeline=PipelineConfig(version="test", run_seed=7, budget=BudgetConfig()),
@@ -119,6 +122,7 @@ def _build_settings(*, tmp_path: Path, total: int = 10, problems: int = 4) -> Ap
                 "l2": {"neutral": 1.0},
                 "l3": {"neutral": 1.0},
             },
+            channel=channel,
         ),
         validation=ValidationConfig(enabled=False, max_retries=0),
         observability=ObservabilityConfig(),
@@ -373,3 +377,46 @@ def test_lineage_links_every_ticket(
             (run_id,),
         ).fetchone()["n"]
     assert unlinked == 0
+
+
+def test_phone_call_metadata_is_deterministic_across_runs(
+    tmp_path: Path, company: CompanyProfile, scenarios: ScenarioCatalogue
+) -> None:
+    """Call start times and scripted greetings are pinned by seed + slot, not by the clock."""
+    import json
+
+    def _run(sub: str) -> list[tuple[str, str, str, str]]:
+        (tmp_path / sub).mkdir()
+        settings = _build_settings(tmp_path=tmp_path / sub, total=6, problems=2, channel="phone")
+        db = Database(path=Path(settings.storage.sqlite_path))
+        apply_migrations(db)
+        run_id = asyncio.run(
+            run_pipeline(
+                settings=settings,
+                factory=_build_fake_factory(tmp_path),
+                db=db,
+                company=company,
+                scenarios=scenarios,
+            )
+        )
+        with db.connect() as conn:
+            rows = conn.execute(
+                "SELECT resolution_uid, channel, started_at, turns_json FROM resolutions "
+                "WHERE run_id = ?",
+                (run_id,),
+            ).fetchall()
+        return sorted(
+            (
+                r["resolution_uid"].split(":", 1)[1],
+                r["channel"],
+                r["started_at"],
+                json.loads(r["turns_json"])[0]["content"],
+            )
+            for r in rows
+        )
+
+    a, b = _run("a"), _run("b")
+    assert a == b
+    assert len(a) == 6
+    assert {row[1] for row in a} == {"phone"}
+    assert len({row[2] for row in a}) == 6

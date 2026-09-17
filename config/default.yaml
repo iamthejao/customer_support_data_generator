@@ -52,6 +52,19 @@ tickets:
     l1:           { neutral: 0.5, frustrated: 0.3, polite: 0.2 }
     l2:           { frustrated: 0.5, urgent: 0.3, neutral: 0.2 }
     l3:           { urgent: 0.4, frustrated: 0.4, neutral: 0.2 }
+  # Conversation / output format (CLI: --channel):
+  #   email — written tickets (subject + body, then written replies)
+  #   phone — spoken call transcripts: scripted agent greeting, verification,
+  #           troubleshooting, closing; per-utterance timestamps estimated at commit.
+  channel: email
+  phone:
+    disfluency: light      # none | light | moderate (CLI: --disfluency)
+  # Deterministic contact times: seeded weekday, in-hours slots starting here.
+  # Never taken from the wall clock, so the same seed yields the same times.
+  calendar:
+    start: "2026-01-05T08:00:00+00:00"
+    span_days: 20          # business days over which first contacts are spread
+    business_hours: [8, 18]
 
 validation:
   enabled: true
