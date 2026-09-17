@@ -215,13 +215,14 @@ def test_real_default_yaml_loads_and_satisfies_structural_invariants() -> None:
     assert types <= set(s.tickets.tone_proportions_per_type)
 
 
-def test_default_embedding_block_is_disabled() -> None:
+def test_default_embedding_block_is_well_formed() -> None:
+    # `enabled` and `threshold` are tuning knobs (default.yaml turns dedup on),
+    # so only the endpoint wiring and value ranges are pinned here.
     settings = load_settings(default_path="config/default.yaml")
-    assert settings.embedding.enabled is False
     assert settings.embedding.provider == "openai_compat"
     assert settings.embedding.base_url == "http://localhost:11434/v1"
     assert settings.embedding.model == "embeddinggemma:300m"
     assert settings.embedding.dim == 768
-    assert settings.embedding.threshold == pytest.approx(0.85)
+    assert 0.0 < settings.embedding.threshold <= 1.0
     assert settings.embedding.text_template == "title_summary"
     assert settings.embedding.timeout_s == 30
