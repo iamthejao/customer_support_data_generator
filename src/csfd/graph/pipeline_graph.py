@@ -35,6 +35,7 @@ from csfd.agents.factory import AgentFactory
 from csfd.models.registry import build_llm
 from csfd.pipeline import (
     DialogueTurnOutput,
+    EndReason,
     ProblemBrainstormOutput,
     ResolutionOutput,
     _acompute_run_stats,
@@ -57,6 +58,21 @@ type _CompiledGraph = CompiledStateGraph[Any, Any, Any, Any]
 # --------------------------------------------------------------------------- #
 
 
+class _RoundSpec(BaseModel):
+    """Pydantic mirror of ``csfd.rounds.RoundSpec`` for checkpoint serialization.
+
+    The defaults describe a plain single-contact case, which is what a slot
+    without a round plan (e.g. a hand-built test plan) behaves as.
+    """
+
+    sequence: int = 1
+    count: int = 1
+    started_at: datetime | None = None
+    agent_name: str | None = None
+    end_mode: Literal["final", "follow_up", "dropped"] = "final"
+    drop_after_turns: int | None = None
+
+
 class _PlanSlot(BaseModel):
     """Pydantic mirror of ``csfd.allocator.TicketSlot`` for checkpoint serialization."""
 
@@ -65,8 +81,18 @@ class _PlanSlot(BaseModel):
     ticket_type: TicketType
     tier: str
     tone: str
-    # Seeded contact time (see csfd.calls.schedule_first_contact).
-    started_at: datetime | None = None
+    # One entry per contact of this case (see csfd.rounds.plan_case_rounds).
+    rounds: list[_RoundSpec] = Field(default_factory=list)
+
+
+class _PriorContact(BaseModel):
+    """An already-committed earlier contact of the current case (continuity context)."""
+
+    sequence: int
+    started_at: datetime | None
+    ended_at: datetime | None
+    end_reason: EndReason
+    turns: list[DialogueTurnOutput]
 
 
 class PipelineState(BaseModel):
@@ -97,12 +123,16 @@ class PipelineState(BaseModel):
     # --- Phase 2 progress ---
     plan_slots: list[_PlanSlot] = Field(default_factory=list)
     slot_index: int = 0
+    # Position within the current slot's rounds, and the contacts already
+    # committed for it (reset when the case's last contact commits).
+    round_index: int = 0
+    case_history: list[_PriorContact] = Field(default_factory=list)
 
     # --- per-slot dialogue progress (reset in commit_dialogue_node) ---
     current_dialogue_turns: list[DialogueTurnOutput] = Field(default_factory=list)
     dialogue_last_speaker: Literal["customer", "agent"] | None = None
     dialogue_done: bool = False
-    dialogue_end_reason: Literal["customer_done", "agent_done", "cap_hit"] | None = None
+    dialogue_end_reason: EndReason | None = None
     dialogue_turn_cap: int = 20
 
     # --- per-artifact transient (reused across both phases; reset in commit_*) ---

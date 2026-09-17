@@ -8,6 +8,7 @@ downstream consumers (e.g. a report pipeline that reads call transcripts)::
         case_000001/
             case.json               # case metadata (no transcript text)
             call_01.txt             # phone channel; email_01.txt for email
+            call_02.txt             # further contacts of a multi-contact case
 
 Each ``.txt`` file is a ``key: value`` header, a blank line, then the
 transcript. Ground truth (root cause, resolution hints) is deliberately not
@@ -31,12 +32,13 @@ SELECT l.ticket_uid, l.slot_index, l.problem_id, l.ticket_type,
        l.customer_tier, l.customer_tone,
        ir.customer_name, ir.channel, ir.subject,
        res.resolution_uid, res.turns_json, res.resolved, res.quality_flag,
-       res.agent_name, res.end_reason, res.started_at, res.ended_at, res.duration_s
+       res.agent_name, res.end_reason, res.started_at, res.ended_at, res.duration_s,
+       res.round_index, res.round_count
 FROM lineage l
-JOIN incoming_requests ir ON ir.id = l.incoming_request_id
-JOIN resolutions res ON res.incoming_request_id = ir.id
+JOIN resolutions res ON res.case_uid = l.ticket_uid
+JOIN incoming_requests ir ON ir.id = res.incoming_request_id
 WHERE l.run_id = ?
-ORDER BY l.slot_index
+ORDER BY l.slot_index, res.round_index
 """
 
 _FILE_NOUN = {"phone": "call", "email": "email"}
@@ -73,7 +75,7 @@ class Contact:
 
 @dataclass(slots=True)
 class Case:
-    """All contacts that belong to one allocation slot."""
+    """All contacts that belong to one allocation slot, ordered by sequence."""
 
     case_id: str
     run_id: str
@@ -123,7 +125,8 @@ def load_cases(db: Database, run_id: str) -> list[Case]:
             )
         case.contacts.append(
             Contact(
-                sequence=len(case.contacts) + 1,
+                sequence=int(r["round_index"]),
+                count=int(r["round_count"]),
                 channel=r["channel"],
                 reason=r["subject"],
                 customer_name=r["customer_name"],
@@ -139,17 +142,15 @@ def load_cases(db: Database, run_id: str) -> list[Case]:
                 turns=json.loads(r["turns_json"]),
             )
         )
-    for case in cases.values():
-        for c in case.contacts:
-            c.count = len(case.contacts)
     return list(cases.values())
 
 
 def _gap_s(case: Case, contact: Contact) -> float | None:
     """Seconds between the previous contact's end (or start) and this one's start."""
-    if contact.sequence == 1 or contact.started_at is None:
+    position = case.contacts.index(contact)
+    if position == 0 or contact.started_at is None:
         return None
-    prev = case.contacts[contact.sequence - 2]
+    prev = case.contacts[position - 1]
     prev_end = prev.ended_at or prev.started_at
     if prev_end is None:
         return None
@@ -205,6 +206,11 @@ def _phone_lines(contact: Contact, *, timestamps: bool) -> list[str]:
         speaker = str(turn["speaker"]).upper()
         prefix = f"[{format_offset(start)}] " if timestamps and "start_s" in turn else ""
         lines.append(f"{prefix}{speaker}: {text}")
+    if contact.end_reason == "dropped":
+        end = contact.duration_s or 0.0
+        lines.append(
+            f"[{format_offset(end)}] (call disconnected)" if timestamps else "(call disconnected)"
+        )
     return lines
 
 
@@ -215,6 +221,8 @@ def _email_lines(contact: Contact) -> list[str]:
             lines.append("")
         lines.append(f"--- {str(turn['speaker']).upper()} ---")
         lines.append(str(turn["content"]).strip())
+    if contact.end_reason == "dropped":
+        lines += ["", "(no further reply in this exchange)"]
     return lines
 
 
@@ -275,6 +283,7 @@ def case_payload(case: Case, *, utterances: bool = False) -> dict[str, Any]:
         "customer_name": case.customer_name,
         "channel": case.channel,
         "contact_count": len(case.contacts),
+        "planned_contact_count": case.contacts[-1].count if case.contacts else 0,
         "resolved": final.resolved if final else False,
         "contacts": [_contact_payload(case, c, utterances=utterances) for c in case.contacts],
     }

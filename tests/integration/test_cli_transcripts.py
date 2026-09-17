@@ -92,6 +92,7 @@ def _seed_email_case(db_path: Path) -> None:
             body="Hello, the display flickers.",
             quality_flag=None,
             created_at=now,
+            case_uid=ticket_uid,
         )
     )
     res_id = ResolutionRepo(db).create(
@@ -117,6 +118,7 @@ def _seed_email_case(db_path: Path) -> None:
             agent_name="Agent-l1-0001",
             end_reason="agent_done",
             started_at=datetime(2026, 1, 6, 9, 15, tzinfo=UTC),
+            case_uid=ticket_uid,
         )
     )
     LineageRepo(db).update_links(ticket_uid, incoming_request_id=ir_id, resolution_id=res_id)
@@ -174,3 +176,9 @@ def test_generate_rejects_unknown_disfluency() -> None:
     result = runner.invoke(app, ["generate", "--disfluency", "heavy"])
     assert result.exit_code != 0
     assert "must be one of: none, light, moderate" in result.output
+
+
+def test_generate_rejects_zero_rounds() -> None:
+    result = runner.invoke(app, ["generate", "--rounds", "0"])
+    assert result.exit_code != 0
+    assert "--rounds" in result.output

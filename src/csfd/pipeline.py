@@ -73,12 +73,17 @@ class IncomingRequestOutput(BaseModel):
     body: str
 
 
+# How the dialogue loop ended. "dropped" is a planned mid-conversation cut-off
+# of a non-final contact in a multi-contact case (see csfd.rounds).
+EndReason = Literal["customer_done", "agent_done", "cap_hit", "dropped"]
+
+
 class ResolutionOutput(BaseModel):
     subject: str
     body: str
     turns: list[DialogueTurnOutput] = Field(default_factory=list)
     resolved: bool = False
-    end_reason: Literal["customer_done", "agent_done", "cap_hit"] = "agent_done"
+    end_reason: EndReason = "agent_done"
 
 
 class ConsistencyVerdict(BaseModel):
@@ -94,7 +99,7 @@ RESOLVED_DONE_REASONS = frozenset({"resolved", "customer_satisfied", "issue_fixe
 
 def _derive_resolved(end_reason: str, last_done_reason: str | None) -> bool:
     """True iff the conversation ended naturally on a resolved-style reason."""
-    if end_reason == "cap_hit":
+    if end_reason in ("cap_hit", "dropped"):
         return False
     return last_done_reason in RESOLVED_DONE_REASONS
 
@@ -104,7 +109,7 @@ def _assemble_resolution(
     subject: str,
     body: str,
     turns: list[DialogueTurnOutput],
-    end_reason: Literal["customer_done", "agent_done", "cap_hit"],
+    end_reason: EndReason,
 ) -> ResolutionOutput:
     """Build a ResolutionOutput from accumulated dialogue state, deriving `resolved`."""
     last_reason = turns[-1].done_reason if turns else None
@@ -163,14 +168,14 @@ def _compute_run_stats(
     health without joining trace rows. Stored in ``runs.stats_json``.
     """
 
-    def _group_count(table: str, group_col: str) -> dict[str, int]:
+    def _group_count(table: str, group_col: str, extra_where: str = "") -> dict[str, int]:
         with db.connect() as conn:
             rows = conn.execute(
                 f"SELECT {group_col} AS k, COUNT(*) AS n FROM {table} "
-                f"WHERE run_id = ? GROUP BY {group_col} ORDER BY {group_col}",
+                f"WHERE run_id = ? {extra_where} GROUP BY {group_col} ORDER BY {group_col}",
                 (run_id,),
             ).fetchall()
-        return {(r["k"] or "ok"): int(r["n"]) for r in rows}
+        return {str(r["k"] or "ok"): int(r["n"]) for r in rows}
 
     with db.connect() as conn:
         problem_count = int(
@@ -204,9 +209,12 @@ def _compute_run_stats(
         "resolutions_count": res_count,
         "agent_traces_count": trace_count,
         "complexity_counts": _group_count("problems", "complexity"),
-        "type_counts": _group_count("incoming_requests", "ticket_type"),
-        "tier_counts": _group_count("incoming_requests", "customer_tier"),
-        "tone_counts": _group_count("incoming_requests", "customer_tone"),
+        # Per case (lineage row), so multi-contact cases are not counted twice.
+        "type_counts": _group_count("lineage", "ticket_type"),
+        "tier_counts": _group_count("lineage", "customer_tier"),
+        "tone_counts": _group_count("lineage", "customer_tone"),
+        "channel_counts": _group_count("resolutions", "channel"),
+        "contacts_per_case": _group_count("resolutions", "round_count", "AND round_index = 1"),
         "quality_flags": {
             "problems": _group_count("problems", "quality_flag"),
             "incoming_requests": _group_count("incoming_requests", "quality_flag"),
@@ -224,15 +232,15 @@ async def _acompute_run_stats(
 ) -> dict[str, Any]:
     """Async sibling of :func:`_compute_run_stats` used inside graph nodes."""
 
-    async def _group_count(table: str, group_col: str) -> dict[str, int]:
+    async def _group_count(table: str, group_col: str, extra_where: str = "") -> dict[str, int]:
         async with adb.connect() as conn:
             cur = await conn.execute(
                 f"SELECT {group_col} AS k, COUNT(*) AS n FROM {table} "
-                f"WHERE run_id = ? GROUP BY {group_col} ORDER BY {group_col}",
+                f"WHERE run_id = ? {extra_where} GROUP BY {group_col} ORDER BY {group_col}",
                 (run_id,),
             )
             rows = await cur.fetchall()
-        return {(r["k"] or "ok"): int(r["n"]) for r in rows}
+        return {str(r["k"] or "ok"): int(r["n"]) for r in rows}
 
     async def _count(table: str) -> int:
         async with adb.connect() as conn:
@@ -250,9 +258,14 @@ async def _acompute_run_stats(
         "resolutions_count": await _count("resolutions"),
         "agent_traces_count": await _count("agent_traces"),
         "complexity_counts": await _group_count("problems", "complexity"),
-        "type_counts": await _group_count("incoming_requests", "ticket_type"),
-        "tier_counts": await _group_count("incoming_requests", "customer_tier"),
-        "tone_counts": await _group_count("incoming_requests", "customer_tone"),
+        # Per case (lineage row), so multi-contact cases are not counted twice.
+        "type_counts": await _group_count("lineage", "ticket_type"),
+        "tier_counts": await _group_count("lineage", "customer_tier"),
+        "tone_counts": await _group_count("lineage", "customer_tone"),
+        "channel_counts": await _group_count("resolutions", "channel"),
+        "contacts_per_case": await _group_count(
+            "resolutions", "round_count", "AND round_index = 1"
+        ),
         "quality_flags": {
             "problems": await _group_count("problems", "quality_flag"),
             "incoming_requests": await _group_count("incoming_requests", "quality_flag"),

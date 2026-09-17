@@ -474,6 +474,36 @@ class IncomingRequestRecord:
     body: str
     quality_flag: str | None
     created_at: datetime
+    case_uid: str | None = None
+    round_index: int = 1
+
+
+_INCOMING_REQUEST_INSERT_SQL = """
+    INSERT OR IGNORE INTO incoming_requests
+      (request_uid, run_id, problem_id, ticket_type, customer_name,
+       customer_tier, customer_tone, channel, subject, body,
+       quality_flag, created_at, case_uid, round_index)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+
+def _incoming_request_params(r: IncomingRequestRecord) -> tuple[Any, ...]:
+    return (
+        r.request_uid,
+        r.run_id,
+        r.problem_id,
+        r.ticket_type,
+        r.customer_name,
+        r.customer_tier,
+        r.customer_tone,
+        r.channel,
+        r.subject,
+        r.body,
+        r.quality_flag,
+        r.created_at.isoformat(),
+        r.case_uid,
+        r.round_index,
+    )
 
 
 class IncomingRequestRepo:
@@ -488,29 +518,7 @@ class IncomingRequestRepo:
         gets a valid FK target.
         """
         with self.db.connect() as conn:
-            cur = conn.execute(
-                """
-                INSERT OR IGNORE INTO incoming_requests
-                  (request_uid, run_id, problem_id, ticket_type, customer_name,
-                   customer_tier, customer_tone, channel, subject, body,
-                   quality_flag, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    r.request_uid,
-                    r.run_id,
-                    r.problem_id,
-                    r.ticket_type,
-                    r.customer_name,
-                    r.customer_tier,
-                    r.customer_tone,
-                    r.channel,
-                    r.subject,
-                    r.body,
-                    r.quality_flag,
-                    r.created_at.isoformat(),
-                ),
-            )
+            cur = conn.execute(_INCOMING_REQUEST_INSERT_SQL, _incoming_request_params(r))
             if cur.lastrowid:
                 return int(cur.lastrowid)
             row = conn.execute(
@@ -522,29 +530,7 @@ class IncomingRequestRepo:
     async def acreate(self, adb: AsyncDatabase, r: IncomingRequestRecord) -> int:
         """Async sibling of :meth:`create`. Returns the inserted-or-existing row id."""
         async with adb.connect() as conn:
-            cur = await conn.execute(
-                """
-                INSERT OR IGNORE INTO incoming_requests
-                  (request_uid, run_id, problem_id, ticket_type, customer_name,
-                   customer_tier, customer_tone, channel, subject, body,
-                   quality_flag, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    r.request_uid,
-                    r.run_id,
-                    r.problem_id,
-                    r.ticket_type,
-                    r.customer_name,
-                    r.customer_tier,
-                    r.customer_tone,
-                    r.channel,
-                    r.subject,
-                    r.body,
-                    r.quality_flag,
-                    r.created_at.isoformat(),
-                ),
-            )
+            cur = await conn.execute(_INCOMING_REQUEST_INSERT_SQL, _incoming_request_params(r))
             if cur.lastrowid:
                 return int(cur.lastrowid)
             cur2 = await conn.execute(
@@ -590,6 +576,9 @@ class ResolutionRecord:
     started_at: datetime | None = None
     ended_at: datetime | None = None
     duration_s: float | None = None
+    case_uid: str | None = None
+    round_index: int = 1
+    round_count: int = 1
 
 
 def _resolution_params(r: ResolutionRecord) -> tuple[Any, ...]:
@@ -610,6 +599,9 @@ def _resolution_params(r: ResolutionRecord) -> tuple[Any, ...]:
         r.started_at.isoformat() if r.started_at else None,
         r.ended_at.isoformat() if r.ended_at else None,
         r.duration_s,
+        r.case_uid,
+        r.round_index,
+        r.round_count,
     )
 
 
@@ -618,8 +610,8 @@ _RESOLUTION_INSERT_SQL = """
       (resolution_uid, run_id, incoming_request_id, problem_id,
        ticket_type, turns_json, turn_count, resolved,
        quality_flag, created_at, channel, agent_name, end_reason,
-       started_at, ended_at, duration_s)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       started_at, ended_at, duration_s, case_uid, round_index, round_count)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 

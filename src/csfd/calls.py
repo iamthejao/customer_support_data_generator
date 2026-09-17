@@ -6,7 +6,8 @@ greeting, and when each utterance starts and ends — is derived here from the
 text plus a seeded RNG (see :func:`csfd.utils.rng.derive_rng`), never from the
 wall clock and never asked of the model:
 
-* :func:`schedule_first_contact` — a weekday, business-hours start time.
+* :func:`schedule_first_contact` / :func:`schedule_next_contact` — weekday,
+  business-hours start times for a case's first and follow-up contacts.
 * :func:`scripted_greeting` — the agent's opening line, picked from a small
   set of call-center scripts.
 * :func:`estimate_turn_timings` — per-utterance offsets from word counts, a
@@ -24,6 +25,7 @@ Transcript tags the phone prompts may emit (and nothing else in brackets):
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -88,6 +90,38 @@ def schedule_first_contact(calendar: CalendarConfig, rng: Random) -> datetime:
     return midnight + timedelta(hours=open_h, minutes=minute, seconds=rng.randrange(60))
 
 
+def _in_business_hours(at: datetime, calendar: CalendarConfig) -> bool:
+    open_h, close_h = calendar.business_hours
+    minutes = at.hour * 60 + at.minute
+    return _is_business_day(at) and open_h * 60 <= minutes < close_h * 60 - 30
+
+
+def schedule_next_contact(
+    previous_start: datetime,
+    *,
+    gap_hours: tuple[float, float],
+    calendar: CalendarConfig,
+    rng: Random,
+) -> datetime:
+    """Start time for the next contact of a case, at least ``gap_hours[0]`` later.
+
+    The gap is drawn log-uniformly (many same-day callbacks, a tail of
+    multi-day ones). A time outside business hours moves to the next business
+    morning, which only ever makes the gap longer.
+    """
+    lo, hi = gap_hours
+    gap = math.exp(rng.uniform(math.log(lo), math.log(hi)))
+    at = previous_start + timedelta(hours=gap)
+    morning_jitter = timedelta(minutes=rng.randrange(90), seconds=rng.randrange(60))
+    if _in_business_hours(at, calendar):
+        return at
+    open_h = calendar.business_hours[0]
+    day = at if at.hour < open_h else at + timedelta(days=1)
+    while not _is_business_day(day):
+        day += timedelta(days=1)
+    return day.replace(hour=open_h, minute=0, second=0, microsecond=0) + morning_jitter
+
+
 def _daypart(at: datetime) -> str:
     if at.hour < 12:
         return "morning"
@@ -140,6 +174,17 @@ def estimate_turn_timings(contents: Sequence[str], rng: Random) -> list[TurnTimi
         prev_start = start
         prev_text = stripped
     return out
+
+
+def describe_gap(seconds: float) -> str:
+    """Human phrase for the time between two contacts, as a caller would put it."""
+    minutes = seconds / 60
+    if minutes < 90:
+        return f"about {max(1, round(minutes))} minutes"
+    hours = minutes / 60
+    if hours < 36:
+        return f"about {round(hours)} hours"
+    return f"about {round(hours / 24)} days"
 
 
 def format_offset(seconds: float) -> str:

@@ -65,6 +65,15 @@ tickets:
     start: "2026-01-05T08:00:00+00:00"
     span_days: 20          # business days over which first contacts are spread
     business_hours: [8, 18]
+  # Multi-contact cases (CLI: --rounds N). tickets.total counts cases; a case
+  # with N rounds yields N related contacts (e.g. a caller who calls back) that
+  # share a case id. Rounds 1..N-1 end without closing the case, round N concludes it.
+  rounds:
+    proportions: {1: 1.0}  # contacts per case, e.g. {1: 0.6, 2: 0.3, 3: 0.1}
+    callback_reasons:      # why a non-final contact ends
+      follow_up: 0.7       #   an agreed next step that needs time (test, part, visit)
+      dropped: 0.3         #   the call cuts off mid-conversation
+    gap_hours: [2, 72]     # hours between contact starts (log-uniform, moved into business hours)
 
 validation:
   enabled: true

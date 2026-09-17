@@ -30,6 +30,7 @@ from csfd.settings import (
     ObservabilityConfig,
     PipelineConfig,
     ProblemDatabaseConfig,
+    RoundsConfig,
     StorageConfig,
     TicketsConfig,
     ValidationConfig,
@@ -48,6 +49,7 @@ def build_settings(
     max_retries: int = 0,
     turn_cap: int = 20,
     channel: Channel = "email",
+    rounds: RoundsConfig | None = None,
 ) -> AppSettings:
     return AppSettings(
         pipeline=PipelineConfig(version="test", run_seed=7, budget=BudgetConfig()),
@@ -66,6 +68,7 @@ def build_settings(
                 "l3": {"neutral": 1.0},
             },
             channel=channel,
+            rounds=rounds or RoundsConfig(),
         ),
         validation=ValidationConfig(enabled=validation_enabled, max_retries=max_retries),
         observability=ObservabilityConfig(),
@@ -144,6 +147,16 @@ def setup_db(tmp_path: Path) -> Database:
     seed_run(db)
     ProblemRepo(db).create(problem())
     return db
+
+
+def resolution_rows(db: Database) -> list[dict[str, Any]]:
+    """Every resolution of the run, ordered by case then contact."""
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM resolutions WHERE run_id = ? ORDER BY case_uid, round_index",
+            (RUN_ID,),
+        ).fetchall()
+    return [{**dict(r), "turns": json.loads(r["turns_json"])} for r in rows]
 
 
 def resolution_row(db: Database) -> dict[str, Any]:

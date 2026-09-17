@@ -10,6 +10,15 @@ Internal knowledge (do not paste verbatim; use it to guide diagnosis):
 {% for rc in inputs.problem.root_cause %}  - {{ rc }}
 {% endfor %}
 - Resolution guidance for this ticket type: {{ inputs.problem.resolution_hint }}
+{%- if inputs.case_history %}
+
+Case history — this customer has contacted support about this before (CRM notes and transcripts):
+{% for c in inputs.case_history %}
+Contact {{ c.sequence }} — {{ c.when }}{% if c.ended == "dropped" %} (ended abruptly before a conclusion){% else %} (ended with an agreed next step){% endif %}:
+{% for t in c.turns %}{{ t.speaker | upper }}: {{ t.content }}
+{% endfor %}{% endfor %}
+Pick up where the case left off: don't re-ask for details already given (a quick identity check is fine), and don't repeat steps that were already tried unless you need to confirm them.
+{%- endif %}
 
 Conversation so far (turn {{ inputs.turn_index }} of at most {{ inputs.turn_cap }}):
 {% for t in inputs.conversation_so_far %}{{ t.speaker }}: {{ t.content }}
@@ -21,6 +30,17 @@ How to respond:
 - Short conversations are correct for simple problems. If the symptoms are clear enough to answer in one turn, do so. Do not pad with unnecessary clarifying questions when the description is already sufficient.
 - Set `done=true` when the issue is resolved (`done_reason="resolved"`), the customer is satisfied (`done_reason="customer_satisfied"`), or you must close/escalate (`done_reason="escalation"` or `"closed"`). Otherwise `done=false`.
 - Stay within your tier: a {{ inputs.ticket_type }} agent must not promise actions outside its scope.
+{%- if inputs.round %}
+
+This is contact {{ inputs.round.sequence }} of {{ inputs.round.count }} for this case. Override for this contact:
+{%- if inputs.round.end_mode == "follow_up" %}
+- It must NOT close the case. Work toward one concrete next step that needs time (a check or test the customer will do, a part or technician visit, monitoring the unit), and once it is agreed, end the contact with `done=true` and `done_reason="follow_up"`. Do not declare the problem fixed.
+{%- elif inputs.round.end_mode == "dropped" %}
+- It does not reach a resolution. Keep working the problem step by step; do not wrap up and do not set `done=true`.
+{%- else %}
+- It is the last contact: bring the case to its conclusion (resolve it, or escalate or close it if that is what the problem needs).
+{%- endif %}
+{%- endif %}
 
 {% if inputs.prior_issues -%}
 A prior version of this conversation failed consistency review. Address each issue:

@@ -48,7 +48,7 @@ YAML that controls the deterministic shape of the run — counts, proportions, r
   - `pipeline` — `version`, `run_seed`, and the per-run budget (`max_tokens_per_run`, `max_usd_per_run`, `max_retries_per_artifact`).
   - `agents` — the two LLM buckets (`generator` and `combined_checker`) with `provider`, `model`, `temperature`, `max_tokens`, and `timeout_s`. Every node in the graph routes to one of these buckets.
   - `problem_database` — Phase 1 controls: `count` and `complexity_proportions` (simple / medium / complex), applied with largest-remainder rounding.
-  - `tickets` — Phase 2 controls: `total`, `type_proportions`, `tier_proportions`, `tone_proportions_per_type`, `dialogue.turn_cap`, and `assignment_strategy` (`complexity_weighted` or `uniform`). Turn count is **emergent** — the two dialogue agents decide when the conversation is over — so there is no per-type turn target; `dialogue.turn_cap` (default 20) is only a hard safety ceiling that rarely binds. Conversation format: `channel` (`email`, the default, or `phone`), `phone.disfluency` (`none` / `light` / `moderate`), and `calendar` (the fixed start date, span, and business hours that seeded contact times are drawn from).
+  - `tickets` — Phase 2 controls: `total`, `type_proportions`, `tier_proportions`, `tone_proportions_per_type`, `dialogue.turn_cap`, and `assignment_strategy` (`complexity_weighted` or `uniform`). Turn count is **emergent** — the two dialogue agents decide when the conversation is over — so there is no per-type turn target; `dialogue.turn_cap` (default 20) is only a hard safety ceiling that rarely binds. Conversation format: `channel` (`email`, the default, or `phone`), `phone.disfluency` (`none` / `light` / `moderate`), and `calendar` (the fixed start date, span, and business hours that seeded contact times are drawn from). `rounds` spreads a case over several related contacts (callbacks); see [Multi-call cases](#multi-call-cases-rounds).
   - `validation` — whether the combined checker runs after each generation and how its verdict gates retries.
   - `embedding` — opt-in Phase 1 dedup. When `enabled: true`, accepted candidates are embedded via an OpenAI-compatible endpoint (defaults to local Ollama at `http://localhost:11434/v1` with `embeddinggemma:300m`) and rejected if cosine similarity to any already-committed problem in the run meets or exceeds `threshold`. `dim` truncates the model's native vector (Matryoshka); `text_template` selects between `title_summary` and `title_summary_background`.
 - **`config/profiles/*.yaml`** — overlays applied on top of `default.yaml` via `--profile <name>`. Shipped overlays cover model routing (`claude-only`, `claude-cli`, `local-only`, `mixed`) and a small `dev` overlay that shrinks problem/ticket counts for fast iteration.
@@ -90,6 +90,13 @@ To generate phone calls instead of email tickets, and get them as text transcrip
 ```bash
 csfd generate --channel phone --seed 42 --problems 5 --tickets 20   # prints the run id
 csfd export <run_id> --format transcripts                           # data/exports/<run_id>/transcripts/
+```
+
+To make every case a series of related calls (the caller calls back until it is solved):
+
+```bash
+csfd generate --channel phone --rounds 3 --problems 5 --tickets 10  # 10 cases x 3 calls
+csfd export <run_id> --format transcripts                           # case_*/call_01.txt … call_03.txt
 ```
 
 ## Architecture
@@ -183,9 +190,9 @@ A single `csfd generate` invocation walks the parent graph from top to bottom. E
 
 12. **Retry sub-loop.** Fail + retries left → re-roll the whole conversation from `generate_incoming_request`. Retries exhausted → accept with a quality flag.
 
-13. **Commit the dialogue.** `commit_dialogue` inserts the `incoming_requests` row and the `resolutions` row (with the full turn list and the derived `resolved` flag), then backfills the pre-recorded `lineage` row with their ids. The benchmark "gold tuple" is now complete for this slot.
+13. **Commit the dialogue.** `commit_dialogue` inserts the `incoming_requests` row and the `resolutions` row (with the full turn list, the derived `resolved` flag, and, for phone calls, per-utterance timings), then backfills the pre-recorded `lineage` row with their ids. For the first contact of a case, the benchmark "gold tuple" is now complete for this slot.
 
-14. **Outer Phase 2 loop.** If more slots remain in the allocation plan, route back to `generate_incoming_request`; otherwise Phase 2 exits.
+14. **Outer Phase 2 loop.** If the case has more rounds, route back to `generate_incoming_request` for the same slot with the committed contact added to the case history. Otherwise, if more slots remain in the allocation plan, move to the next slot; when none remain, Phase 2 exits.
 
 15. **`finalize_run` node.** The parent graph aggregates end-of-run statistics — total problems, requests, resolutions, traces, plus type/tier/tone/complexity breakdowns and quality-flag distribution — writes `stats_json` and `completed_at` onto the `runs` row, and marks the run completed.
 
@@ -235,7 +242,54 @@ agent: Agent-l1-0001 (L1 Support)
 [00:01:02] AGENT: Thanks for holding. So that alarm usually points at airflow over the condenser…
 ```
 
+A case with several calls gets `call_01.txt`, `call_02.txt`, … in the same folder, and each later file's header adds `since_previous_call: 1d 2h 05m`. See [Multi-call cases](#multi-call-cases-rounds).
+
 The transcript folder deliberately holds no ground truth. Join `case.json`'s `problem_id` against `problems.jsonl` to score a downstream report against the root cause and resolution hints.
+
+## Multi-call cases (rounds)
+
+A downstream consumer often needs *several* contacts about the same problem, such as a caller who hangs up, tries something, and calls back. `tickets.rounds` models this without a second pipeline. Each allocation slot is a **case** (one `lineage` row, one `ticket_uid`), and a case can span N **rounds** (contacts). All rounds of a case share the problem, customer, tier, tone, and `case_uid`.
+
+```yaml
+tickets:
+  total: 20                  # cases
+  rounds:
+    proportions: {1: 0.5, 2: 0.3, 3: 0.2}   # 10 x 1 call, 6 x 2 calls, 4 x 3 calls = 36 calls
+    callback_reasons: {follow_up: 0.7, dropped: 0.3}
+    gap_hours: [2, 72]
+```
+
+`--rounds N` is the shortcut for `proportions: {N: 1.0}`. The default `{1: 1.0}` is the original one-contact-per-case behaviour, with identical prompts.
+
+How a case plays out:
+
+- **Planned up front, deterministically.** `csfd.rounds` assigns contact counts with largest-remainder rounding and a seeded shuffle, then plans each contact before any LLM call:
+  - its start time: a log-uniform gap from `gap_hours`, moved into business hours if it falls outside them;
+  - who picks up: `Agent-l2-0003`, then `Agent-l2-0003-r2`, …;
+  - how each non-final contact ends.
+- **Non-final rounds end without closing the case:**
+  - `follow_up`: both speakers work toward a next step that needs time (a test the customer runs, a part, a technician visit) and end with `done_reason="follow_up"`.
+  - `dropped`: the line cuts off after a seeded number of turns. This reuses the turn-cap route with a lower per-contact cap, is recorded as `end_reason="dropped"` with no warning, and is rendered as `(call disconnected)`.
+- **The final round** is told to bring the case to a conclusion.
+- **Continuity.** From round 2 on, both the customer and the agent prompts get the earlier contacts' transcripts: the customer remembers them, and the agent reads them as case history. The prompts also state the time since the last contact. The caller refers back to the earlier call and keeps details such as the serial number. The agent picks up where the case left off. The consistency checker sees the same history and checks continuity, plus the planned ending (a follow-up round must not declare the problem fixed).
+- **Retries** re-roll only the current round. Rounds already committed are never regenerated.
+
+Storage and consumption:
+
+- Every contact is one `incoming_requests` row and one `resolutions` row, with `case_uid` (= `lineage.ticket_uid`) and `round_index`. `resolutions` also carries `round_count`. Round 1 keeps the familiar `<ticket_uid>:req/:res` uids, and later rounds add `:rNN`.
+- `lineage` stays one row per case and links to **round 1**. The gold-tuple join below therefore yields each case's first contact. Join `resolutions.case_uid = lineage.ticket_uid` for all of them.
+- `runs.stats_json` counts types, tiers, and tones per case, and adds `contacts_per_case` and `channel_counts`.
+- The transcript export groups a case's contacts into one folder (`call_01.txt` … `call_NN.txt`). `case.json` lists each contact's timing, `gap_since_previous_s`, `end_reason`, `outcome`, and `resolved`. Feed a whole folder to a consumer that builds one report from many calls.
+
+```sql
+-- every contact of every case, in order
+SELECT l.ticket_uid AS case_uid, res.round_index, res.round_count, res.started_at,
+       res.end_reason, res.resolved, res.turns_json
+FROM lineage l
+JOIN resolutions res ON res.case_uid = l.ticket_uid
+WHERE l.run_id = :run_id
+ORDER BY l.slot_index, res.round_index;
+```
 
 ## LangGraph Studio
 
@@ -265,7 +319,11 @@ Determinism guarantee: given identical config and seed, two runs against fresh d
 
 Pin an exported benchmark to its provenance via `runs.config_snapshot_json` and the per-row `prompt_id` / `model_id` columns in `agent_traces`.
 
-Contact metadata follows the same rule. Each contact's `started_at` and the phone channel's scripted greeting come from `(run_seed, slot_index)` and `tickets.calendar`, never the wall clock, so they reproduce exactly. Per-utterance timestamps, `ended_at`, and `duration_s` are derived deterministically from the generated text, so they vary only when the text does.
+Contact metadata follows the same rule. Several values come from `(run_seed, slot_index)` plus `tickets.calendar` / `tickets.rounds`, never the wall clock, so they reproduce exactly:
+
+- the number of contacts per case;
+- each contact's `started_at`, agent name, and planned ending (including where a dropped call cuts off);
+- the phone channel's scripted greeting. Per-utterance timestamps, `ended_at`, and `duration_s` are derived deterministically from the generated text, so they vary only when the text does.
 
 Embedding scores depend on the Ollama model/version and platform: a candidate whose cosine is very close to `embedding.threshold` can flip across Ollama upgrades. The deterministic allocation guarantee (slot-by-slot lineage) is unchanged.
 
@@ -273,7 +331,7 @@ Known limitation — model revisions: `agent_traces.model_id` records the model 
 
 ## Benchmark consumption
 
-The "gold tuple" join over `problems`, `incoming_requests`, `resolutions`, and `lineage`:
+The "gold tuple" join over `problems`, `incoming_requests`, `resolutions`, and `lineage` (for multi-call cases this is the first contact; see [Multi-call cases](#multi-call-cases-rounds) for the per-contact join):
 
 ```sql
 SELECT p.id AS problem_id,
@@ -322,6 +380,7 @@ Embedding-based dedup is enabled in `local-only` and `mixed` (which run against 
 | `csfd db-migrate` | apply SQL migrations to `runs.sqlite` |
 | `csfd generate --seed N --problems M --tickets T` | run the deterministic LangGraph pipeline |
 | `csfd generate --channel phone [--disfluency none\|light\|moderate]` | generate phone-call transcripts instead of email tickets |
+| `csfd generate --rounds N` | make every case N related contacts (callbacks); mixes go in `tickets.rounds.proportions` |
 | `csfd export RUN_ID --format jsonl\|parquet\|both\|transcripts\|all [--no-timestamps]` | dump to `data/exports/<run_id>/` (`both` = JSONL + Parquet; `all` adds transcripts) |
 | `csfd inspect RUN_ID` | print summary stats |
 | `csfd render-graphs` | regenerate `docs/diagrams/*.mmd` |

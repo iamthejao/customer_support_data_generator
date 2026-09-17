@@ -144,6 +144,14 @@ def generate(
         "--disfluency",
         help="Phone speech style: none | light | moderate. Overrides tickets.phone.disfluency.",
     ),
+    rounds: int | None = typer.Option(
+        None,
+        "--rounds",
+        min=1,
+        help="Contacts per case: every case becomes N related calls/emails (callbacks), "
+        "with the first N-1 ending unresolved. Sets tickets.rounds.proportions to {N: 1.0}; "
+        "configure a mix (e.g. {1: 0.6, 2: 0.3, 3: 0.1}) in YAML instead.",
+    ),
 ) -> None:
     """Run the deterministic, proportion-based pipeline end-to-end.
 
@@ -168,6 +176,8 @@ def generate(
         settings.tickets.channel = channel_choice
     if disfluency_choice is not None:
         settings.tickets.phone.disfluency = disfluency_choice
+    if rounds is not None:
+        settings.tickets.rounds.proportions = {rounds: 1.0}
     factory = _build_factory(profile)
     db = Database(path=Path(settings.storage.sqlite_path))
     apply_migrations(db)
@@ -247,8 +257,8 @@ def inspect(
     typer.echo("Deterministic pipeline datasets:")
     typer.echo(f"  problem_database:  {len(pdb)}")
     typer.echo(f"  incoming_requests: {ir}")
-    typer.echo(f"  resolutions:       {res}")
-    typer.echo(f"  lineage:           {lin}")
+    typer.echo(f"  resolutions:       {res}  (one per contact)")
+    typer.echo(f"  lineage:           {lin}  (one per case)")
 
 
 @app.command("render-graphs")
