@@ -113,7 +113,7 @@ Phase 1 turns company/scenario seeds into a reusable Problem Database. It determ
 
 ### Phase 2 graph — Requests and resolutions
 
-Phase 2 consumes the persisted Problem Database and the configured ticket proportions. It first builds the allocation plan, which fixes every slot's problem, ticket type, customer tier, and tone before generation starts. For each slot, it generates a standalone incoming customer request and a full resolution conversation, validates the result, persists `incoming_requests` and `resolutions`, and backfills `lineage` so every benchmark row can be traced back to its originating problem.
+Phase 2 consumes the persisted Problem Database and the configured ticket proportions. It first builds the allocation plan, which fixes every slot's problem, ticket type, customer tier, and tone before generation starts, plus each slot's round plan (how many contacts the case takes and when). For each contact, it generates a standalone incoming customer request and a full turn-by-turn conversation, validates the result, persists `incoming_requests` and `resolutions`, and backfills `lineage` so every benchmark row can be traced back to its originating problem.
 
 ```mermaid
 flowchart TB
@@ -141,15 +141,21 @@ flowchart TB
         CP -->|more problems| GP
     end
     subgraph P2["Phase 2 subgraph (csfd.graph.phase2_graph)"]
-        BAP[build_allocation_plan<br>deterministic slots +<br>pre-record lineage]
-        GR[generate_resolution<br>LLM + TracingAdapter]
-        VR[validate_resolution<br>combined_checker, optional]
-        CR[commit_resolution<br>persist incoming_request<br>+ resolution + backfill lineage]
-        BAP --> GR
-        GR --> VR
-        VR -->|fail & retries left| GR
-        VR -->|pass / exhausted| CR
-        CR -->|more slots| GR
+        BAP[build_allocation_plan<br>deterministic slots + round plan<br>+ pre-record lineage]
+        GIR[generate_incoming_request<br>customer opening<br>phone: scripted greeting first]
+        GAT[generate_agent_turn<br>root-cause view]
+        GCT[generate_customer_turn<br>symptoms view]
+        VC[validate_conversation<br>consistency agent, optional]
+        CD[commit_dialogue<br>persist contact + call timing<br>backfill lineage]
+        BAP --> GIR
+        GIR --> GAT
+        GAT -->|not done| GCT
+        GCT -->|not done| GAT
+        GAT -->|done / cap / planned drop| VC
+        GCT -->|done / cap / planned drop| VC
+        VC -->|fail & retries left| GIR
+        VC -->|pass / exhausted| CD
+        CD -->|next round of the case<br>or next slot| GIR
     end
     Seeds --> IR
     IR --> P1

@@ -6,26 +6,38 @@ config:
 graph TD;
 	__start__([<p>__start__</p>]):::first
 	build_allocation_plan(build_allocation_plan)
-	generate_resolution(generate_resolution)
-	validate_resolution(validate_resolution)
-	commit_resolution(commit_resolution)
+	generate_incoming_request(generate_incoming_request)
+	generate_agent_turn(generate_agent_turn)
+	generate_customer_turn(generate_customer_turn)
+	validate_conversation(validate_conversation)
+	commit_dialogue(commit_dialogue)
 	_bump_retry(_bump_retry)
 	_mark_exhausted(_mark_exhausted)
 	_mark_validation_skipped(_mark_validation_skipped)
+	_mark_cap_hit(_mark_cap_hit)
+	_route_consistency_or_skip(_route_consistency_or_skip)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> build_allocation_plan;
-	_bump_retry --> generate_resolution;
-	_mark_exhausted --> commit_resolution;
-	_mark_validation_skipped --> commit_resolution;
+	_bump_retry --> generate_incoming_request;
+	_mark_cap_hit --> _route_consistency_or_skip;
+	_mark_exhausted --> commit_dialogue;
+	_mark_validation_skipped --> commit_dialogue;
+	_route_consistency_or_skip -. &nbsp;skip&nbsp; .-> _mark_validation_skipped;
+	_route_consistency_or_skip -. &nbsp;validate&nbsp; .-> validate_conversation;
 	build_allocation_plan -. &nbsp;done&nbsp; .-> __end__;
-	build_allocation_plan -. &nbsp;generate&nbsp; .-> generate_resolution;
-	commit_resolution -. &nbsp;done&nbsp; .-> __end__;
-	commit_resolution -. &nbsp;next&nbsp; .-> generate_resolution;
-	generate_resolution -. &nbsp;commit&nbsp; .-> _mark_validation_skipped;
-	generate_resolution -. &nbsp;validate&nbsp; .-> validate_resolution;
-	validate_resolution -. &nbsp;retry&nbsp; .-> _bump_retry;
-	validate_resolution -. &nbsp;exhausted&nbsp; .-> _mark_exhausted;
-	validate_resolution -. &nbsp;pass&nbsp; .-> commit_resolution;
+	build_allocation_plan -. &nbsp;generate&nbsp; .-> generate_incoming_request;
+	commit_dialogue -. &nbsp;done&nbsp; .-> __end__;
+	commit_dialogue -. &nbsp;next&nbsp; .-> generate_incoming_request;
+	generate_agent_turn -. &nbsp;cap&nbsp; .-> _mark_cap_hit;
+	generate_agent_turn -. &nbsp;consistency&nbsp; .-> _route_consistency_or_skip;
+	generate_agent_turn -. &nbsp;customer&nbsp; .-> generate_customer_turn;
+	generate_customer_turn -. &nbsp;cap&nbsp; .-> _mark_cap_hit;
+	generate_customer_turn -. &nbsp;consistency&nbsp; .-> _route_consistency_or_skip;
+	generate_customer_turn -. &nbsp;agent&nbsp; .-> generate_agent_turn;
+	generate_incoming_request --> generate_agent_turn;
+	validate_conversation -. &nbsp;retry&nbsp; .-> _bump_retry;
+	validate_conversation -. &nbsp;exhausted&nbsp; .-> _mark_exhausted;
+	validate_conversation -. &nbsp;pass&nbsp; .-> commit_dialogue;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc
