@@ -128,16 +128,19 @@ def _apply_consistency_edits(
     """Return the draft unchanged on pass, or a new draft with the verdict's edits applied.
 
     Only fields the verdict explicitly sets are replaced; `resolved` is re-derived
-    from the (possibly edited) turns against the original `end_reason`.
+    from the (possibly edited) turns. A natural ending (`customer_done` /
+    `agent_done`) follows whoever speaks last in the edited turns, since the
+    checker may append a closing turn; `cap_hit` / `dropped` are kept as-is.
     """
     if verdict.status != "pass_with_edits":
         return draft
     subject = verdict.edited_subject if verdict.edited_subject is not None else draft.subject
     body = verdict.edited_body if verdict.edited_body is not None else draft.body
     turns = verdict.edited_turns if verdict.edited_turns is not None else draft.turns
-    return _assemble_resolution(
-        subject=subject, body=body, turns=turns, end_reason=draft.end_reason
-    )
+    end_reason = draft.end_reason
+    if end_reason in ("customer_done", "agent_done") and turns:
+        end_reason = "customer_done" if turns[-1].speaker == "customer" else "agent_done"
+    return _assemble_resolution(subject=subject, body=body, turns=turns, end_reason=end_reason)
 
 
 # --------------------------------------------------------------------------- #

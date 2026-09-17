@@ -57,3 +57,29 @@ def test_pass_with_edits_partial_keeps_originals() -> None:
     assert out.subject == "only subj"
     assert out.body == "orig body"
     assert out.turns == draft.turns
+
+
+def test_appended_closing_turn_moves_end_reason_to_last_speaker() -> None:
+    # Seen live: the checker appended an agent wrap-up after the customer's done turn.
+    draft = _draft().model_copy(update={"end_reason": "customer_done"})
+    edited = [
+        *draft.turns,
+        DialogueTurnOutput(
+            speaker="agent", content="Glad it works.", done=True, done_reason="resolved"
+        ),
+    ]
+    out = _apply_consistency_edits(
+        draft, ConsistencyVerdict(status="pass_with_edits", edited_turns=edited)
+    )
+    assert out.end_reason == "agent_done"
+    assert out.resolved is True
+
+
+def test_edits_keep_cap_and_drop_end_reasons() -> None:
+    for reason in ("cap_hit", "dropped"):
+        draft = _draft().model_copy(update={"end_reason": reason})
+        out = _apply_consistency_edits(
+            draft, ConsistencyVerdict(status="pass_with_edits", edited_turns=draft.turns)
+        )
+        assert out.end_reason == reason
+        assert out.resolved is False
