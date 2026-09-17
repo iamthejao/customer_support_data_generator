@@ -672,7 +672,7 @@ async def commit_dialogue_node(
             ticket_type=slot.ticket_type.value,
             turns=turns,
             turn_count=len(draft.turns),
-            resolved=draft.resolved,
+            resolved=draft.resolved and rnd.sequence == rnd.count,
             quality_flag=state.last_quality_flag,
             created_at=datetime.now(UTC),
             channel=channel,

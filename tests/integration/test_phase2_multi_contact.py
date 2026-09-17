@@ -163,6 +163,34 @@ def test_multi_contact_transcript_export_groups_calls(tmp_path: Path) -> None:
     assert c2["gap_since_previous_s"] > 3600
 
 
+def test_non_final_call_is_never_stored_as_resolved(tmp_path: Path) -> None:
+    rounds = RoundsConfig(proportions={2: 1.0}, callback_reasons={"follow_up": 1.0})
+    turns = [
+        # call 1 is planned as a follow-up, but the customer claims it is fixed
+        _turn("agent", "Please reseat the power connector."),
+        _turn("customer", "That did it, thanks!", "customer_satisfied"),
+        _turn("agent", "Thanks for calling back. Let's replace the PSU cable then."),
+        _turn("customer", "New cable is in, it's stable now. Thanks!", "customer_satisfied"),
+    ]
+    db, _, _ = _run(tmp_path, rounds, turns, validation=False)
+
+    first, second = h.resolution_rows(db)
+    assert first["turns"][-1]["done_reason"] == "customer_satisfied"
+    assert (bool(first["resolved"]), bool(second["resolved"])) == (False, True)
+    assert second["round_index"] == 2
+
+    out = tmp_path / "exports"
+    export_run_transcripts(db, h.RUN_ID, out_dir=out)
+    meta = json.loads((out / h.RUN_ID / "transcripts" / "case_000001" / "case.json").read_text())
+    assert [c["resolved"] for c in meta["contacts"]] == [False, True]
+    assert meta["resolved"] is True
+    (case,) = [
+        json.loads(line)
+        for line in (out / h.RUN_ID / "transcripts" / "cases.jsonl").read_text().splitlines()
+    ]
+    assert [c["resolved"] for c in case["contacts"]] == [False, True]
+
+
 def test_dropped_call_is_cut_off_and_called_back(tmp_path: Path) -> None:
     rounds = RoundsConfig(proportions={2: 1.0}, callback_reasons={"dropped": 1.0})
     settings = h.build_settings(tmp_path, validation_enabled=False, channel="phone", rounds=rounds)

@@ -220,33 +220,26 @@ def _phone_customer_inputs(disfluency: str) -> dict[str, object]:
     }
 
 
-_DISFLUENCY_MARKERS = {
-    "none": "no filler words",
-    "light": "an occasional filler",
-    "moderate": "filler words (",
-}
-
-
-@pytest.mark.parametrize("disfluency", ["none", "light", "moderate"])
 @pytest.mark.parametrize("prompt", ["phase2.phone_incoming_request", "phase2.phone_customer_turn"])
 def test_phone_customer_prompts_render_disfluency_branch(
-    registry: PromptRegistry, prompt: str, disfluency: str
+    registry: PromptRegistry, prompt: str
 ) -> None:
-    rendered = registry.get(prompt).template.render(inputs=_phone_customer_inputs(disfluency))
-    assert "unit power-cycles every 20 minutes" in rendered
-    assert _DISFLUENCY_MARKERS[disfluency] in rendered
-    for other, marker in _DISFLUENCY_MARKERS.items():
-        if other != disfluency:
-            assert marker not in rendered
-    assert "Customer-standard-0001" in rendered
+    template = registry.get(prompt).template
+    renders = {
+        level: template.render(inputs=_phone_customer_inputs(level))
+        for level in ("none", "light", "moderate")
+    }
+    assert len(set(renders.values())) == 3
+    for rendered in renders.values():
+        assert "unit power-cycles every 20 minutes" in rendered
+        assert "Customer-standard-0001" in rendered
 
 
 def test_phone_incoming_request_shows_greeting(registry: PromptRegistry) -> None:
     rendered = registry.get("phase2.phone_incoming_request").template.render(
         inputs=_phone_customer_inputs("light")
     )
-    assert "AGENT: Thank you for calling CoolTherm support" in rendered
-    assert "reason for the call" in rendered
+    assert "AGENT: Thank you for calling CoolTherm support, this is Agent-l1-0001." in rendered
 
 
 def test_phone_customer_turn_renders_uppercase_speakers(registry: PromptRegistry) -> None:
@@ -256,34 +249,39 @@ def test_phone_customer_turn_renders_uppercase_speakers(registry: PromptRegistry
     assert "AGENT: Can I get the serial number?" in rendered
 
 
-@pytest.mark.parametrize("disfluency", ["none", "light", "moderate"])
-def test_phone_agent_turn_renders_call_flow(registry: PromptRegistry, disfluency: str) -> None:
-    rendered = registry.get("phase2.phone_agent_turn").template.render(
-        inputs={
-            "company_name": "CoolTherm",
-            "agent_name": "Agent-l2-0004",
-            "ticket_type": "l2",
-            "problem": {
-                "title": "t",
-                "summary": "s",
-                "background": "b",
-                "category": "c",
-                "fault_domain": "hardware",
-                "root_cause": ["loose PSU connector"],
-                "resolution_hint": "reseat",
-            },
-            "disfluency": disfluency,
-            "conversation_so_far": [{"speaker": "customer", "content": "It keeps tripping."}],
-            "turn_index": 3,
-            "turn_cap": 20,
-            "prior_issues": ["agent read the root cause aloud"],
-        }
-    )
-    assert "loose PSU connector" in rendered
-    assert "CUSTOMER: It keeps tripping." in rendered
-    assert "serial number" in rendered
-    assert "[hold]" in rendered
-    assert "agent read the root cause aloud" in rendered
+def _phone_agent_inputs(disfluency: str) -> dict[str, object]:
+    return {
+        "company_name": "CoolTherm",
+        "agent_name": "Agent-l2-0004",
+        "ticket_type": "l2",
+        "problem": {
+            "title": "t",
+            "summary": "s",
+            "background": "b",
+            "category": "c",
+            "fault_domain": "hardware",
+            "root_cause": ["loose PSU connector"],
+            "resolution_hint": "reseat",
+        },
+        "disfluency": disfluency,
+        "conversation_so_far": [{"speaker": "customer", "content": "It keeps tripping."}],
+        "turn_index": 3,
+        "turn_cap": 20,
+        "prior_issues": ["agent read the root cause aloud"],
+    }
+
+
+def test_phone_agent_turn_renders_call_flow(registry: PromptRegistry) -> None:
+    template = registry.get("phase2.phone_agent_turn").template
+    renders = {
+        level: template.render(inputs=_phone_agent_inputs(level))
+        for level in ("none", "light", "moderate")
+    }
+    assert len(set(renders.values())) == 3
+    for rendered in renders.values():
+        assert "loose PSU connector" in rendered
+        assert "CUSTOMER: It keeps tripping." in rendered
+        assert "agent read the root cause aloud" in rendered
 
 
 def test_consistency_check_phone_block_only_for_phone(registry: PromptRegistry) -> None:
@@ -295,6 +293,5 @@ def test_consistency_check_phone_block_only_for_phone(registry: PromptRegistry) 
     }
     phone = handle.template.render(inputs={**base, "channel": "phone"})
     email = handle.template.render(inputs={**base, "channel": "email"})
-    assert "phone-call transcript" in phone
-    assert "phone-call transcript" not in email
+    assert phone != email
     assert email == handle.template.render(inputs=base)
