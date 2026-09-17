@@ -270,9 +270,9 @@ def test_duplicate_triggers_retry_and_feeds_matched_problem_to_generator(
     asyncio.run(compiled.ainvoke(state))
 
     # The generator should have been called 3 times: slot0 once, slot1 twice.
-    assert (
-        len(captured_generator_ctx) == 3
-    ), f"expected 3 generator calls, got {len(captured_generator_ctx)}"
+    assert len(captured_generator_ctx) == 3, (
+        f"expected 3 generator calls, got {len(captured_generator_ctx)}"
+    )
 
     # The third call (slot 1, retry attempt 1) is the key contract: it must
     # have received the dedup verdict as a prior_verdict so the prompt's
