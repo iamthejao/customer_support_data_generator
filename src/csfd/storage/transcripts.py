@@ -192,9 +192,9 @@ def _header(case: Case, contact: Contact) -> list[str]:
     lines.append(f"{noun}: {contact.sequence} of {contact.count}")
     lines.append("channel: phone (inbound)" if phone else "channel: email")
     if contact.started_at is not None:
-        lines.append(f"started_at: {contact.started_at.isoformat()}")
+        lines.append(f"started_at: {contact.started_at.isoformat(timespec='seconds')}")
     if contact.ended_at is not None:
-        lines.append(f"ended_at: {contact.ended_at.isoformat()}")
+        lines.append(f"ended_at: {contact.ended_at.isoformat(timespec='seconds')}")
     if phone and contact.duration_s is not None:
         lines.append(f"duration: {format_offset(contact.duration_s)}")
     gap = _gap_s(case, contact)

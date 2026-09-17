@@ -165,3 +165,17 @@ def test_phone_transcript_export_without_timestamps(tmp_path: Path) -> None:
     assert body.splitlines()[0].startswith("AGENT: ")
     assert not re.search(r"^\[\d{2}:", body, re.MULTILINE)
     assert "(caller on hold, " in body
+
+
+def test_phone_transcript_header_times_are_whole_seconds(tmp_path: Path) -> None:
+    db = _run_phone_slot(tmp_path)
+    out = tmp_path / "exports"
+    export_run_transcripts(db, h.RUN_ID, out_dir=out)
+    header = (
+        (out / h.RUN_ID / "transcripts" / "case_000001" / "call_01.txt")
+        .read_text()
+        .partition("\n\n")[0]
+    )
+    for key in ("started_at", "ended_at"):
+        (value,) = [line.split(": ", 1)[1] for line in header.splitlines() if line.startswith(key)]
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00", value), value

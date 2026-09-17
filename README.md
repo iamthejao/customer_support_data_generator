@@ -23,7 +23,7 @@ Each run produces a benchmark-ready dataset with separate artifacts for causes, 
 - **`lineage`** — the join table that links each ticket slot to its originating problem, request, and resolution. This makes evaluation slices explainable: every benchmark example can be traced back to the root cause and configured distribution slot.
 - **`agent_traces`** — one audit row per LLM call, including prompt version, model/provider metadata, latency, checker verdicts, and parent-child links between generation and validation. Use this to debug output quality and compare runs.
 - **`manifest.json`** — export metadata and file checksums for the generated JSONL/Parquet artifacts. Use it to pin a dataset version in downstream benchmarks.
-- **`transcripts/`** — the same conversations rendered as plain-text transcripts, one folder per case (`csfd export --format transcripts`). With `tickets.channel: phone` these are call transcripts with speaker labels, timestamps, and call metadata, ready to feed a pipeline that consumes call transcriptions. See [Phone-call transcripts](#phone-call-transcripts).
+- **`transcripts/`** — the same conversations rendered as plain-text transcripts, one folder per case (`csfd export --format transcripts`). Depending on `tickets.channel` these are dated email threads or call transcripts with speaker labels, timestamps, and call metadata, ready to feed a pipeline that consumes call transcriptions. See [Conversation formats](#conversation-formats).
 
 Together, these datasets support both online-style evaluation, where only `incoming_requests` are shown to a system under test, and offline analysis, where `problems`, `resolutions`, `lineage`, and traces explain why each example exists and how it was generated.
 
@@ -48,7 +48,7 @@ YAML that controls the deterministic shape of the run — counts, proportions, r
   - `pipeline` — `version`, `run_seed`, and the per-run budget (`max_tokens_per_run`, `max_usd_per_run`, `max_retries_per_artifact`).
   - `agents` — the two LLM buckets (`generator` and `combined_checker`) with `provider`, `model`, `temperature`, `max_tokens`, and `timeout_s`. Every node in the graph routes to one of these buckets.
   - `problem_database` — Phase 1 controls: `count` and `complexity_proportions` (simple / medium / complex), applied with largest-remainder rounding.
-  - `tickets` — Phase 2 controls: `total`, `type_proportions`, `tier_proportions`, `tone_proportions_per_type`, `dialogue.turn_cap`, and `assignment_strategy` (`complexity_weighted` or `uniform`). Turn count is **emergent** — the two dialogue agents decide when the conversation is over — so there is no per-type turn target; `dialogue.turn_cap` (default 20) is only a hard safety ceiling that rarely binds. Conversation format: `channel` (`email`, the default, or `phone`), `phone.disfluency` (`none` / `light` / `moderate`), and `calendar` (the fixed start date, span, and business hours that seeded contact times are drawn from). `rounds` spreads a case over several related contacts (callbacks); see [Multi-call cases](#multi-call-cases-rounds).
+  - `tickets` — Phase 2 controls: `total`, `type_proportions`, `tier_proportions`, `tone_proportions_per_type`, `dialogue.turn_cap`, and `assignment_strategy` (`complexity_weighted` or `uniform`). Turn count is **emergent** — the two dialogue agents decide when the conversation is over — so there is no per-type turn target; `dialogue.turn_cap` (default 20) is only a hard safety ceiling that rarely binds. Conversation format: `channel` (`email`, the default, or `phone`; see [Conversation formats](#conversation-formats)), `phone.disfluency` (`none` / `light` / `moderate`), and `calendar` (the fixed start date, span, and business hours that seeded contact times are drawn from). `rounds` spreads a case over several related contacts (callbacks); see [Multi-call cases](#multi-call-cases-rounds).
   - `validation` — whether the combined checker runs after each generation and how its verdict gates retries.
   - `embedding` — opt-in Phase 1 dedup. When `enabled: true`, accepted candidates are embedded via an OpenAI-compatible endpoint (defaults to local Ollama at `http://localhost:11434/v1` with `embeddinggemma:300m`) and rejected if cosine similarity to any already-committed problem in the run meets or exceeds `threshold`. `dim` truncates the model's native vector (Matryoshka); `text_template` selects between `title_summary` and `title_summary_background`.
 - **`config/profiles/*.yaml`** — overlays applied on top of `default.yaml` via `--profile <name>`. Shipped overlays cover model routing (`claude-only`, `claude-cli`, `local-only`, `mixed`) and a small `dev` overlay that shrinks problem/ticket counts for fast iteration.
@@ -85,7 +85,7 @@ csfd generate --seed 42 --problems 10 --tickets 100
 
 The proportions, turn counts, and assignment strategy live in `config/default.yaml` under the `problem_database`, `tickets`, and `validation` sections. Use `--profile dev` for a small smoke run (`problem_database.count=3`, `tickets.total=6`).
 
-To generate phone calls instead of email tickets, and get them as text transcripts:
+`--channel` selects the conversation format (`email`, the default, or `phone`). To generate phone calls instead of email tickets, and get them as text transcripts:
 
 ```bash
 csfd generate --channel phone --seed 42 --problems 5 --tickets 20   # prints the run id
@@ -196,7 +196,7 @@ A single `csfd generate` invocation walks the parent graph from top to bottom. E
 
 12. **Retry sub-loop.** Fail + retries left → re-roll the whole conversation from `generate_incoming_request`. Retries exhausted → accept with a quality flag.
 
-13. **Commit the dialogue.** `commit_dialogue` inserts the `incoming_requests` row and the `resolutions` row (with the full turn list, the derived `resolved` flag, and, for phone calls, per-utterance timings), then backfills the pre-recorded `lineage` row with their ids. For the first contact of a case, the benchmark "gold tuple" is now complete for this slot.
+13. **Commit the dialogue.** `commit_dialogue` inserts the `incoming_requests` row and the `resolutions` row (with the full turn list, the derived `resolved` flag, and per-message timing: utterance offsets for calls, sent times for emails), then backfills the pre-recorded `lineage` row with their ids. For the first contact of a case, the benchmark "gold tuple" is now complete for this slot.
 
 14. **Outer Phase 2 loop.** If the case has more rounds, route back to `generate_incoming_request` for the same slot with the committed contact added to the case history. Otherwise, if more slots remain in the allocation plan, move to the next slot; when none remain, Phase 2 exits.
 
@@ -206,49 +206,98 @@ A single `csfd generate` invocation walks the parent graph from top to bottom. E
 
 Two invariants hold across the whole walk: every LLM call produces exactly one `agent_traces` row (so cost and quality are auditable per call), and Phase 2 never invents allocation decisions on the fly — the plan from step 9 fully determines what gets generated.
 
-## Phone-call transcripts
+## Conversation formats
 
-`tickets.channel: phone` (or `csfd generate --channel phone`) keeps the pipeline unchanged and swaps the Phase 2 conversation style to spoken calls. The dialogue loop, information asymmetry, consistency review, and allocation plan are identical to the email channel. Only the prompts and the recorded metadata change:
+One switch selects how Phase 2 conversations look: `tickets.channel` in YAML, or `csfd generate --channel`.
 
-- **Call flow.** Turn 1 is the agent's scripted greeting, picked by seed from a few call-center scripts (no LLM call). Turn 2 is the caller's opening. The `phone_agent_turn` prompt then steers the usual flow: verify who is calling and which machine (model, serial, site), clarify, troubleshoot one step at a time, agree the next step, and close. The call reason the caller gives is logged in `incoming_requests.subject`.
+| Value | Conversation | Transcript file |
+|---|---|---|
+| `email` (default) | Written support tickets: the customer's opening email (subject + body), then written replies, each dated | `email_NN.txt`, an email thread |
+| `phone` | Spoken support calls: scripted greeting, verification, troubleshooting, closing; per-utterance timestamps | `call_NN.txt`, a call transcript |
+
+A run uses one format; a mixed email and phone run is not supported yet. The dialogue loop, information asymmetry, consistency review, allocation plan, and [multi-contact cases](#multi-call-cases-rounds) are identical for both. Only the prompts and the recorded timing change. Nothing time-related is ever asked of the model. Each contact's `started_at` is a seeded weekday, business-hours slot inside `tickets.calendar`, and `resolutions` records `channel`, `agent_name`, `end_reason`, `started_at`, `ended_at`, and `duration_s`.
+
+### Phone calls
+
+- **Call flow.** Turn 1 is the agent's scripted greeting, picked by seed from a few call-center scripts (no LLM call). Turn 2 is the caller's opening. The `phone_agent_turn` prompt then steers the usual flow: verify who is calling and which machine (model, serial, site), clarify, troubleshoot one step at a time, agree the next step, and close. The agent cannot see the machine and has to ask. The call reason the caller gives is logged in `incoming_requests.subject`.
 - **Speech, in moderation.** `tickets.phone.disfluency` (`--disfluency`) controls filler words, restarts, and cut-ins: `none`, `light` (default: occasional), or `moderate`. Callers get more disfluency than agents. The consistency checker is told to keep them rather than tidy the speech into prose.
 - **Transcript tags.** The prompts allow only `[hold]` (at the start of an agent turn, back from a hold the caller agreed to), `[pause]`, `[inaudible]`, and a trailing `--` for a cut-off. They affect timing and rendering. The checker removes any other bracketed tag.
-- **Timing and metadata.** Nothing time-related is asked of the model. Each call's `started_at` is a seeded weekday, business-hours slot inside `tickets.calendar`. At commit, `csfd.calls.estimate_turn_timings` derives per-utterance `start_s` / `end_s` from word counts (about 150 wpm), seeded response latencies, hold gaps (30–180 s), and pauses, and stores them in `turns_json`. `resolutions` records `channel`, `agent_name`, `end_reason`, `started_at`, `ended_at`, and `duration_s`.
+- **Timing.** At commit, `csfd.calls.estimate_turn_timings` derives per-utterance `start_s` / `end_s` from word counts (about 150 wpm), seeded response latencies, hold gaps (30–180 s), and pauses, and stores them in `turns_json`. `ended_at` / `duration_s` mark the end of the call.
+
+### Email threads
+
+- **Messages.** The customer's opening email carries the subject. Customer and agent then exchange written replies. For single-contact cases the email prompts render exactly as before this format existed.
+- **Dates.** At commit, `csfd.calls.estimate_email_times` gives each message a seeded `sent_at` in `turns_json`: support replies after 5 minutes to 4 hours, customers after 3 minutes to 8 hours, both moved into business hours. `ended_at` is the last message's time. When another contact of the same case is planned, the thread is compressed to finish well before it starts.
+- **Rendering.** Each message is written with `From` / `To` / `Date` / `Subject` headers (`Re:` on replies), then the body, then a light one-line quote of the message it answers. Addresses use reserved `.example` domains. The support desk is named after the company in `seeds/company_seed.md`, which is recorded in `runs.config_snapshot_json`.
+
+### Transcript export
 
 `csfd export <run_id> --format transcripts` (or `--format all`) writes a text-first view grouped by case:
 
 ```text
 data/exports/<run_id>/transcripts/
-  cases.jsonl              # one line per case: metadata + utterances with start_s/end_s
+  cases.jsonl              # one line per case: metadata + utterances (start_s/end_s or sent_at)
   case_000001/
-    case.json              # case metadata: problem_id, tier, tone, per-call timing and outcome
+    case.json              # case metadata: problem_id, tier, tone, per-contact timing and outcome
     call_01.txt            # the transcript (email_01.txt on the email channel)
 ```
 
-Each transcript file is a `key: value` header, a blank line, then one line per utterance (`--no-timestamps` drops the `[HH:MM:SS]` prefixes):
+Each transcript file is a `key: value` header, a blank line, then the conversation. A call transcript has one line per utterance (`--no-timestamps` drops the `[HH:MM:SS]` prefixes). The two samples below are real output from small `claude_code_cli` runs with two contacts per case, each showing the second contact (the email bodies are shortened with `[…]`).
 
 ```text
 CALL TRANSCRIPT
-case_id: 3f0c…:000001
-call: 1 of 1
+case_id: 841e40a2-…:000001
+call: 2 of 2
 channel: phone (inbound)
-started_at: 2026-01-13T10:42:31+00:00
-ended_at: 2026-01-13T10:44:47.200000+00:00
-duration: 00:02:16
-caller: Customer-premium-0001 (premium tier)
-agent: Agent-l1-0001 (L1 Support)
+started_at: 2026-01-08T09:19:38+00:00
+ended_at: 2026-01-08T09:23:49+00:00
+duration: 00:04:11
+since_previous_call: 17h 53m
+caller: Customer-standard-0001 (standard tier)
+agent: Agent-l1-0001-r2 (L1 Support)
 
-[00:00:00] AGENT: Thank you for calling CoolTherm support, this is Agent-l1-0001. How can I help you today?
-[00:00:05] CUSTOMER: Hi, yeah, um, our CT-500 at the north site keeps throwing a high-pressure alarm in the afternoons.
-[00:00:12] AGENT: Sorry to hear that. Can I get the serial number off the unit's nameplate?
-[00:00:17] CUSTOMER: Sure, one sec [pause] it's CT5-20417.
-[00:00:26] AGENT: Thanks. Is that alarm clearing on its own, or does someone have to reset it?
-…
-[00:01:02] (caller on hold, 00:00:48)
-[00:01:02] AGENT: Thanks for holding. So that alarm usually points at airflow over the condenser…
+[00:00:00] AGENT: Thank you for calling CoolTherm Industrial Chillers support, this is Agent-l1-0001-r2. How can I help you today?
+[00:00:07] CUSTOMER: Hi, this is Customer-standard-0001 calling back about the temperature control issue on our CT-5000. I spoke with someone yesterday who said Level 2 would reach out within a few hours to tune the PID settings, but I haven't heard from anyone yet and the chiller's still cycling every couple minutes.
+[00:00:28] AGENT: I apologize for that delay - you definitely should have heard from Level 2 by now. Let me check on the status of your escalation right away and make sure we get this prioritized. Can you hold for just a moment while I reach out to the team?
+[00:00:48] CUSTOMER: Sure, no problem — I can hold.
+[00:00:51] (caller on hold, 00:02:48)
+[00:03:40] AGENT: Thanks for holding. I've contacted the Level 2 team and they're going to call you back within the next hour to remotely tune those PID parameters. I've flagged this as high priority since you've been waiting since yesterday. You should see a call from a CoolTherm technical number - they'll be able to access your unit remotely and get that temperature control stabilized. Is there anything else I can help with while I have you on the line?
 ```
 
-A case with several calls gets `call_01.txt`, `call_02.txt`, … in the same folder, and each later file's header adds `since_previous_call: 1d 2h 05m`. See [Multi-call cases](#multi-call-cases-rounds).
+An email thread has one block per message:
+
+```text
+EMAIL THREAD
+case_id: df8e0bab-…:000001
+thread: 2 of 2
+channel: email
+started_at: 2026-01-08T09:19:38+00:00
+ended_at: 2026-01-08T09:25:07+00:00
+since_previous_thread: 17h 43m
+subject: Re: Chiller temperature cycling - completed requested checks
+customer: Customer-standard-0001 (standard tier)
+agent: Agent-l1-0001-r2 (L1 Support)
+
+From: Customer-standard-0001 <customer-standard-0001@customer.example>
+To: CoolTherm Industrial Chillers Support <support@cooltherm-industrial-chillers.example>
+Date: Thu, 08 Jan 2026 09:19:38 +0000
+Subject: Re: Chiller temperature cycling - completed requested checks
+
+I completed the checks you requested yesterday. The refrigerant sight glass shows no bubbles during operation, and I didn't find any obvious leaks at the service ports. I've been recording outlet temperatures from the evaporator over the […]
+
+----------------------------------------
+From: Agent-l1-0001-r2, CoolTherm Industrial Chillers Support <support@cooltherm-industrial-chillers.example>
+To: Customer-standard-0001 <customer-standard-0001@customer.example>
+Date: Thu, 08 Jan 2026 09:25:07 +0000
+Subject: Re: Chiller temperature cycling - completed requested checks
+
+Thank you for completing those checks. The clear sight glass is good news, but the persistent cycling and overshoot behavior, especially after your recent maintenance, points to a thermostatic expansion valve issue or a marginal […]
+
+On Thu, 08 Jan 2026 at 09:19, Customer-standard-0001 wrote:
+> I completed the checks you requested yesterday. The refrigerant sight glass shows no bubbles during…
+```
+
+A case with several contacts gets `call_01.txt`, `call_02.txt`, … (or `email_01.txt`, …) in the same folder. Each later file's header adds `since_previous_call:` / `since_previous_thread:`. See [Multi-call cases](#multi-call-cases-rounds).
 
 The transcript folder deliberately holds no ground truth. Join `case.json`'s `problem_id` against `problems.jsonl` to score a downstream report against the root cause and resolution hints.
 
@@ -317,7 +366,7 @@ Every run stamps:
 - `run_seed` — drives the `uniform` allocator's tiebreaker shuffle; the `complexity_weighted` strategy splits each ticket type's slots across its non-empty preferred complexity buckets via fixed rank weights, so it is reproducible without a seed
 - `pipeline.version` — semver bumped on schema-breaking changes
 - `git_sha` — captured at run start via `git rev-parse HEAD` (NULL outside a git repo)
-- `config_snapshot_json` — the resolved `problem_database` + `tickets` + `validation` sections
+- `config_snapshot_json` — the resolved `problem_database` + `tickets` + `validation` + `embedding` sections, plus the seed company's name
 - `stats_json` — end-of-run counts (problems, requests, resolutions, traces) plus type/tier/tone/complexity breakdowns and quality-flag distribution
 - `prompt_id` — sha256-prefix hash of the **prompt template source** (the Jinja file contents, not the per-call rendered prompt — so the id is a stable handle that changes only when a template is edited), recorded on every row in `agent_traces.prompt_id`. Each LLM call also records `model_provider`, `model_id`, `attempt`, `latency_ms`, and (for checker calls) `verdict` and `verdict_issues_json`. Token usage (`tokens_in`, `tokens_out`) is populated from LangChain's `usage_metadata` for any provider that emits it (Anthropic, OpenAI-compatible); `FakeChatModel` and the Claude CLI wrapper leave them NULL.
 
@@ -410,6 +459,12 @@ Concrete next steps that would meaningfully raise the quality, throughput, or re
 1. **Prompt optimization.** Current agent prompts in the repository are simplistic, mostly used for testing purposes only.
 
 2. **Add creativity / noise agents to diversify generation.** Right now every problem and every resolution is produced by a single generator prompt against the same seed material, which biases output toward the model's mode and produces tickets that feel stylistically homogeneous. A lightweight "noise" agent inserted before the generator — varying customer voice, urgency, partial information, typos, regional phrasing, or back-and-forth ambiguity per slot — would yield datasets that better stress-test routing, RAG retrieval, and agent handling of messy real-world inputs. Determinism is preserved by deriving the noise agent's choices from `(run_seed, slot_index)`.
+
+3. **Richer call realism.** The phone channel is one channel per run, and each call has a single agent. Natural next steps:
+   - a `channel_proportions` mix of email and phone within one run;
+   - warm transfers inside a call (a second agent speaker, e.g. L1 to L2);
+   - escalating the ticket tier between rounds of a case;
+   - an optional, seeded ASR-noise pass (substitutions and deletions) on the exported transcripts, to stress downstream consumers.
 
 ## License
 
