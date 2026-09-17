@@ -68,7 +68,6 @@ class _RoundSpec(BaseModel):
     sequence: int = 1
     count: int = 1
     started_at: datetime | None = None
-    agent_name: str | None = None
     end_mode: Literal["final", "follow_up", "dropped"] = "final"
     drop_after_turns: int | None = None
 

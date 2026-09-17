@@ -6,7 +6,7 @@ import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from csfd.graph.phase2_graph import build_phase2_subgraph
 from csfd.models.fake import FakeChatModel
@@ -38,6 +38,7 @@ def _run(
     *,
     validation: bool,
     channel: Channel = "phone",
+    turn_cap: int = 20,
 ) -> tuple[Database, AppSettings, FakeChatModel]:
     fake = FakeChatModel(
         structured={ConsistencyVerdict: ConsistencyVerdict(status="pass")},
@@ -55,7 +56,12 @@ def _run(
     )
     db = h.setup_db(tmp_path)
     settings = h.build_settings(
-        tmp_path, validation_enabled=validation, max_retries=0, channel=channel, rounds=rounds
+        tmp_path,
+        validation_enabled=validation,
+        max_retries=0,
+        channel=channel,
+        rounds=rounds,
+        turn_cap=turn_cap,
     )
     graph = build_phase2_subgraph(factory=h.factory(fake), db=db, settings=settings)
     asyncio.run(graph.ainvoke(h.initial_state(settings)))
@@ -85,11 +91,12 @@ def test_follow_up_case_yields_two_linked_calls(tmp_path: Path) -> None:
     assert [r["resolution_uid"] for r in rows] == [f"{TICKET_UID}:res", f"{TICKET_UID}:r02:res"]
     assert [bool(r["resolved"]) for r in rows] == [False, True]
     assert rows[0]["turns"][-1]["done_reason"] == "follow_up"
+    # One agent handles every round of a case: the callback greeting names the same one.
     assert [r["agent_name"] for r in rows] == [
         "Agent-docs_request-0001",
-        "Agent-docs_request-0001-r2",
+        "Agent-docs_request-0001",
     ]
-    assert "Agent-docs_request-0001-r2" in rows[1]["turns"][0]["content"]
+    assert all("Agent-docs_request-0001" in r["turns"][0]["content"] for r in rows)
     first_end = datetime.fromisoformat(rows[0]["ended_at"])
     second_start = datetime.fromisoformat(rows[1]["started_at"])
     assert second_start > first_end
@@ -149,7 +156,7 @@ def test_multi_contact_transcript_export_groups_calls(tmp_path: Path) -> None:
     assert "since_previous_call" not in first
     assert "call: 2 of 2" in second
     assert "since_previous_call: " in second
-    assert "agent: Agent-docs_request-0001-r2 (Documentation Rep)" in second
+    assert "agent: Agent-docs_request-0001 (Documentation Rep)" in second
 
     meta = json.loads((case_dir / "case.json").read_text())
     assert meta["case_id"] == TICKET_UID
@@ -191,13 +198,62 @@ def test_non_final_call_is_never_stored_as_resolved(tmp_path: Path) -> None:
     assert [c["resolved"] for c in case["contacts"]] == [False, True]
 
 
+def _callback_histories(db: Database) -> list[list[dict[str, Any]]]:
+    """The case history every prompt of the second contact was given."""
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT input_json FROM agent_traces WHERE run_id = ? AND artifact_id = ?",
+            (h.RUN_ID, f"{TICKET_UID}:r02"),
+        ).fetchall()
+    histories = [json.loads(r["input_json"])["case_history"] for r in rows]
+    assert histories, "the callback made no traced LLM call"
+    return histories
+
+
+def test_capped_first_call_is_not_reported_as_an_agreed_next_step(tmp_path: Path) -> None:
+    rounds = RoundsConfig(proportions={2: 1.0}, callback_reasons={"follow_up": 1.0})
+    turns = [
+        # call 1 is planned as a follow-up, but neither speaker ever wraps up:
+        # the hard turn cap ends it, so nothing was ever agreed.
+        _turn("agent", "Let's check the power connector."),
+        _turn("customer", "It is still restarting."),
+        # call 2 closes the case
+        _turn("agent", "Replacing the PSU cable sorts it.", "resolved"),
+    ]
+    db, _, _ = _run(tmp_path, rounds, turns, validation=False, turn_cap=4)
+
+    first, second = h.resolution_rows(db)
+    assert first["end_reason"] == "cap_hit"
+    assert first["quality_flag"] == "warning:turn_cap_hit"
+    assert not first["resolved"]
+    assert second["resolved"]
+    for history in _callback_histories(db):
+        assert [c["ended"] for c in history] == ["cap_hit"]
+
+
+def test_unhappy_hang_up_is_not_reported_as_an_agreed_next_step(tmp_path: Path) -> None:
+    rounds = RoundsConfig(proportions={2: 1.0}, callback_reasons={"follow_up": 1.0})
+    turns = [
+        # call 1 ends with the caller hanging up unhappy, not with a next step.
+        _turn("agent", "Please reseat the power connector."),
+        _turn("customer", "I have done that twice already, forget it.", "customer_frustrated"),
+        _turn("agent", "Sorry about last time. Let's replace the PSU cable.", "resolved"),
+    ]
+    db, _, _ = _run(tmp_path, rounds, turns, validation=False)
+
+    first, _second = h.resolution_rows(db)
+    assert first["end_reason"] == "customer_done"
+    assert not first["resolved"]
+    for history in _callback_histories(db):
+        assert [c["ended"] for c in history] == ["frustrated"]
+
+
 def test_dropped_call_is_cut_off_and_called_back(tmp_path: Path) -> None:
     rounds = RoundsConfig(proportions={2: 1.0}, callback_reasons={"dropped": 1.0})
     settings = h.build_settings(tmp_path, validation_enabled=False, channel="phone", rounds=rounds)
     plan = plan_case_rounds(
         slot_index=1,
         round_count=2,
-        agent_name="Agent-docs_request-0001",
         rounds=rounds,
         calendar=settings.tickets.calendar,
         seed=settings.pipeline.run_seed or 0,
@@ -286,6 +342,6 @@ def test_email_case_is_a_series_of_dated_threads(tmp_path: Path) -> None:
     assert "since_previous_thread: " in text
     assert "Subject: Callback: still power-cycling\n" in text
     assert "Subject: Re: Callback: still power-cycling\n" in text
-    assert "From: Agent-docs_request-0001-r2, " in text
+    assert "From: Agent-docs_request-0001, " in text
     assert "wrote:\n> Hi, I called earlier, I reseated it and it still restarts." in text
     assert "Date: " in text

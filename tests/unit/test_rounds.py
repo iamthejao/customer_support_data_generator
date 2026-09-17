@@ -47,7 +47,6 @@ def _plan(
     return plan_case_rounds(
         slot_index=3,
         round_count=count,
-        agent_name="Agent-l2-0003",
         rounds=rounds,
         calendar=CalendarConfig(),
         seed=seed,
@@ -63,12 +62,6 @@ def test_plan_case_rounds_orders_contacts_and_ends_with_final() -> None:
     assert specs[-1].end_mode == "final"
     assert specs[-1].drop_after_turns is None
     assert all(s.end_mode in ("follow_up", "dropped") for s in specs[:-1])
-    assert [s.agent_name for s in specs] == [
-        "Agent-l2-0003",
-        "Agent-l2-0003-r2",
-        "Agent-l2-0003-r3",
-        "Agent-l2-0003-r4",
-    ]
     for prev, nxt in pairwise(specs):
         assert nxt.started_at - prev.started_at >= timedelta(hours=2)
         assert nxt.started_at.weekday() < 5
@@ -78,7 +71,7 @@ def test_plan_case_rounds_orders_contacts_and_ends_with_final() -> None:
 def test_plan_case_rounds_single_contact_is_final() -> None:
     (only,) = _plan(1)
     assert only.end_mode == "final"
-    assert only.agent_name == "Agent-l2-0003"
+    assert only.drop_after_turns is None
 
 
 @pytest.mark.parametrize("seed", range(20))

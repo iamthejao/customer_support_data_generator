@@ -14,7 +14,7 @@ Internal knowledge (do not paste verbatim; use it to guide diagnosis):
 
 Case history — this customer has contacted support about this before (CRM notes and transcripts):
 {% for c in inputs.case_history %}
-Contact {{ c.sequence }} — {{ c.when }}{% if c.ended == "dropped" %} (ended abruptly before a conclusion){% else %} (ended with an agreed next step){% endif %}:
+Contact {{ c.sequence }} — {{ c.when }}{% if c.ended == "dropped" %} (ended abruptly before a conclusion){% elif c.ended == "cap_hit" %} (ran long and ended without a conclusion){% elif c.ended == "frustrated" %} (the customer broke off, unhappy){% elif c.ended == "follow_up" %} (ended with an agreed next step){% else %} (ended without fixing the problem){% endif %}:
 {% for t in c.turns %}{{ t.speaker | upper }}: {{ t.content }}
 {% endfor %}{% endfor %}
 Pick up where the case left off: don't re-ask for details already given (a quick identity check is fine), and don't repeat steps that were already tried unless you need to confirm them.

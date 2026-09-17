@@ -9,8 +9,7 @@ This module decides, before any LLM call and purely from
 * how many rounds each case gets (largest-remainder counts, seeded shuffle);
 * when each round starts (see :func:`csfd.calls.schedule_next_contact`);
 * how each non-final round ends (``follow_up`` or ``dropped``) and, for a
-  dropped call, after how many turns the line cuts off;
-* which agent picks up each round.
+  dropped call, after how many turns the line cuts off.
 """
 
 from __future__ import annotations
@@ -37,7 +36,6 @@ class RoundSpec:
     sequence: int  # 1-based position within the case
     count: int  # total contacts in the case
     started_at: datetime
-    agent_name: str
     end_mode: EndMode
     drop_after_turns: int | None = None
 
@@ -62,7 +60,6 @@ def plan_case_rounds(
     *,
     slot_index: int,
     round_count: int,
-    agent_name: str,
     rounds: RoundsConfig,
     calendar: CalendarConfig,
     seed: int,
@@ -103,7 +100,6 @@ def plan_case_rounds(
                 sequence=sequence,
                 count=round_count,
                 started_at=started_at,
-                agent_name=agent_name if sequence == 1 else f"{agent_name}-r{sequence}",
                 end_mode=end_mode,
                 drop_after_turns=drop_after,
             )

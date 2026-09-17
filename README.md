@@ -254,9 +254,9 @@ ended_at: 2026-01-08T09:23:49+00:00
 duration: 00:04:11
 since_previous_call: 17h 53m
 caller: Customer-standard-0001 (standard tier)
-agent: Agent-l1-0001-r2 (L1 Support)
+agent: Agent-l1-0001 (L1 Support)
 
-[00:00:00] AGENT: Thank you for calling CoolTherm Industrial Chillers support, this is Agent-l1-0001-r2. How can I help you today?
+[00:00:00] AGENT: Thank you for calling CoolTherm Industrial Chillers support, this is Agent-l1-0001. How can I help you today?
 [00:00:07] CUSTOMER: Hi, this is Customer-standard-0001 calling back about the temperature control issue on our CT-5000. I spoke with someone yesterday who said Level 2 would reach out within a few hours to tune the PID settings, but I haven't heard from anyone yet and the chiller's still cycling every couple minutes.
 [00:00:28] AGENT: I apologize for that delay - you definitely should have heard from Level 2 by now. Let me check on the status of your escalation right away and make sure we get this prioritized. Can you hold for just a moment while I reach out to the team?
 [00:00:48] CUSTOMER: Sure, no problem — I can hold.
@@ -276,7 +276,7 @@ ended_at: 2026-01-08T09:25:07+00:00
 since_previous_thread: 17h 43m
 subject: Re: Chiller temperature cycling - completed requested checks
 customer: Customer-standard-0001 (standard tier)
-agent: Agent-l1-0001-r2 (L1 Support)
+agent: Agent-l1-0001 (L1 Support)
 
 From: Customer-standard-0001 <customer-standard-0001@customer.example>
 To: CoolTherm Industrial Chillers Support <support@cooltherm-industrial-chillers.example>
@@ -286,7 +286,7 @@ Subject: Re: Chiller temperature cycling - completed requested checks
 I completed the checks you requested yesterday. The refrigerant sight glass shows no bubbles during operation, and I didn't find any obvious leaks at the service ports. I've been recording outlet temperatures from the evaporator over the […]
 
 ----------------------------------------
-From: Agent-l1-0001-r2, CoolTherm Industrial Chillers Support <support@cooltherm-industrial-chillers.example>
+From: Agent-l1-0001, CoolTherm Industrial Chillers Support <support@cooltherm-industrial-chillers.example>
 To: Customer-standard-0001 <customer-standard-0001@customer.example>
 Date: Thu, 08 Jan 2026 09:25:07 +0000
 Subject: Re: Chiller temperature cycling - completed requested checks
@@ -309,7 +309,7 @@ A downstream consumer often needs *several* contacts about the same problem, suc
 tickets:
   total: 20                  # cases
   rounds:
-    proportions: {1: 0.5, 2: 0.3, 3: 0.2}   # 10 x 1 call, 6 x 2 calls, 4 x 3 calls = 36 calls
+    proportions: {1: 0.5, 2: 0.3, 3: 0.2}   # 10 x 1 call, 6 x 2 calls, 4 x 3 calls = 34 calls
     callback_reasons: {follow_up: 0.7, dropped: 0.3}
     gap_hours: [2, 72]
 ```
@@ -320,13 +320,12 @@ How a case plays out:
 
 - **Planned up front, deterministically.** `csfd.rounds` assigns contact counts with largest-remainder rounding and a seeded shuffle, then plans each contact before any LLM call:
   - its start time: a log-uniform gap from `gap_hours`, moved into business hours if it falls outside them;
-  - who picks up: `Agent-l2-0003`, then `Agent-l2-0003-r2`, …;
   - how each non-final contact ends.
 - **Non-final rounds end without closing the case:**
   - `follow_up`: both speakers work toward a next step that needs time (a test the customer runs, a part, a technician visit) and end with `done_reason="follow_up"`.
   - `dropped`: the contact cuts off after a seeded number of turns. This reuses the turn-cap route with a lower per-contact cap and is recorded as `end_reason="dropped"` with no warning. A call renders it as `(call disconnected)`; on the email channel the thread just goes quiet, rendered as `(no further reply in this thread)`.
 - **The final round** is told to bring the case to a conclusion.
-- **Continuity.** From round 2 on, both the customer and the agent prompts get the earlier contacts' transcripts: the customer remembers them, and the agent reads them as case history. The prompts also state the time since the last contact. The caller refers back to the earlier call and keeps details such as the serial number. The agent picks up where the case left off. The consistency checker sees the same history and checks continuity, plus the planned ending (a follow-up round must not declare the problem fixed).
+- **Continuity.** From round 2 on, both the customer and the agent prompts get the earlier contacts' transcripts: the customer remembers them, and the agent reads them as case history. The prompts also state the time since the last contact and how each earlier contact ended — an agreed next step, a dropped line, a contact that ran out of turns, or an unhappy hang-up — so a later round never claims a next step that was never agreed. The caller refers back to the earlier call and keeps details such as the serial number. The agent picks up where the case left off. The consistency checker sees the same history and checks continuity, plus the planned ending (a follow-up round must not declare the problem fixed).
 - **Retries** re-roll only the current round. Rounds already committed are never regenerated.
 
 Storage and consumption:
@@ -465,6 +464,7 @@ Concrete next steps that would meaningfully raise the quality, throughput, or re
 3. **Richer call realism.** The phone channel is one channel per run, and each call has a single agent. Natural next steps:
    - a `channel_proportions` mix of email and phone within one run;
    - warm transfers inside a call (a second agent speaker, e.g. L1 to L2);
+   - a callback picked up by a different agent (today every round of a case is answered by the same one);
    - escalating the ticket tier between rounds of a case;
    - an optional, seeded ASR-noise pass (substitutions and deletions) on the exported transcripts, to stress downstream consumers.
 

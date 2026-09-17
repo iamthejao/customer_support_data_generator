@@ -10,7 +10,7 @@ Your tone (keep consistent): {{ inputs.customer_tone }}
 
 You have called about this problem before. Your earlier calls (you remember them):
 {% for c in inputs.case_history %}
-Call {{ c.sequence }} — {{ c.when }}{% if c.ended == "dropped" %} (the line dropped before the call finished){% endif %}:
+Call {{ c.sequence }} — {{ c.when }}{% if c.ended == "dropped" %} (the line dropped before the call finished){% elif c.ended == "cap_hit" %} (the call went on and ended without a conclusion){% elif c.ended == "frustrated" %} (you hung up, unhappy){% elif c.ended == "follow_up" %} (it ended with a next step you agreed to){% else %} (it ended without fixing the problem){% endif %}:
 {% for t in c.turns %}{{ t.speaker | upper }}: {{ t.content }}
 {% endfor %}{% endfor %}
 It is now {{ inputs.round.since_previous }} since that last call, and the problem is not solved yet.

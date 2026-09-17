@@ -123,17 +123,14 @@ def _customer_name(slot: _PlanSlot) -> str:
     return f"Customer-{slot.tier}-{slot.index:04d}"
 
 
-def _base_agent_name(ticket_type: str, index: int) -> str:
-    return f"Agent-{ticket_type}-{index:04d}"
+def _agent_name(slot: _PlanSlot) -> str:
+    """The one agent who handles this case — every round of a case shares it."""
+    return f"Agent-{slot.ticket_type.value}-{slot.index:04d}"
 
 
 def _current_round(state: PipelineState, slot: _PlanSlot) -> _RoundSpec:
     """The contact being generated; a slot without a round plan is one final contact."""
     return slot.rounds[state.round_index] if slot.rounds else _RoundSpec()
-
-
-def _agent_name(slot: _PlanSlot, rnd: _RoundSpec) -> str:
-    return rnd.agent_name or _base_agent_name(slot.ticket_type.value, slot.index)
 
 
 def _contact_key(state: PipelineState, slot: _PlanSlot, rnd: _RoundSpec) -> str:
@@ -150,6 +147,28 @@ def _effective_turn_cap(state: PipelineState) -> int:
         if rnd.drop_after_turns is not None:
             return min(cap, rnd.drop_after_turns)
     return cap
+
+
+# How an earlier contact of the same case finished, as the next round's prompts
+# describe it. "follow_up" is reserved for a contact that really did agree a next
+# step; everything else that ended without one gets its own label.
+EndedLabel = Literal["dropped", "cap_hit", "frustrated", "follow_up", "unresolved"]
+
+_AGREED_DONE_REASONS = frozenset({"follow_up", "escalation"})
+
+
+def _ended_label(contact: _PriorContact) -> EndedLabel:
+    """Describe how an already-committed contact of this case ended."""
+    if contact.end_reason == "dropped":
+        return "dropped"
+    if contact.end_reason == "cap_hit":
+        return "cap_hit"
+    last_reason = contact.turns[-1].done_reason if contact.turns else None
+    if last_reason == "customer_frustrated":
+        return "frustrated"
+    if last_reason in _AGREED_DONE_REASONS:
+        return "follow_up"
+    return "unresolved"
 
 
 def _round_inputs(state: PipelineState, rnd: _RoundSpec) -> dict[str, Any]:
@@ -177,7 +196,7 @@ def _round_inputs(state: PipelineState, rnd: _RoundSpec) -> dict[str, Any]:
             {
                 "sequence": c.sequence,
                 "when": c.started_at.strftime("%a %d %b %Y, %H:%M") if c.started_at else "earlier",
-                "ended": "dropped" if c.end_reason == "dropped" else "follow_up",
+                "ended": _ended_label(c),
                 "turns": _render_history(c.turns),
             }
             for c in state.case_history
@@ -215,7 +234,7 @@ def _agent_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
     return {
         "company_name": state.company.name,
         "ticket_type": slot.ticket_type.value,
-        "agent_name": _agent_name(slot, rnd),
+        "agent_name": _agent_name(slot),
         "problem": {
             "title": problem.title,
             "summary": problem.summary,
@@ -291,14 +310,12 @@ async def build_allocation_plan_node(
                     sequence=r.sequence,
                     count=r.count,
                     started_at=r.started_at,
-                    agent_name=r.agent_name,
                     end_mode=r.end_mode,
                     drop_after_turns=r.drop_after_turns,
                 )
                 for r in plan_case_rounds(
                     slot_index=s.index,
                     round_count=round_counts[s.index],
-                    agent_name=_base_agent_name(s.ticket_type.value, s.index),
                     rounds=tickets_cfg.rounds,
                     calendar=tickets_cfg.calendar,
                     seed=seed,
@@ -340,7 +357,7 @@ async def generate_incoming_request_node(
         assert rnd.started_at is not None, "build_allocation_plan must schedule the call"
         greeting = scripted_greeting(
             company=state.company.name,
-            agent=_agent_name(slot, rnd),
+            agent=_agent_name(slot),
             at=rnd.started_at,
             rng=derive_rng(state.run_seed, f"{contact_label(slot.index, rnd.sequence)}:greeting"),
         )
@@ -676,7 +693,7 @@ async def commit_dialogue_node(
             quality_flag=state.last_quality_flag,
             created_at=datetime.now(UTC),
             channel=channel,
-            agent_name=_agent_name(slot, rnd),
+            agent_name=_agent_name(slot),
             end_reason=draft.end_reason,
             started_at=rnd.started_at,
             ended_at=ended_at,
