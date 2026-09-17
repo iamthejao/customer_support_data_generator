@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from csfd.storage.repository import (
 
 runner = CliRunner()
 RUN_ID = "run-email"
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _seed_email_case(db_path: Path) -> None:
@@ -221,4 +223,6 @@ def test_generate_rejects_unknown_disfluency() -> None:
 def test_generate_rejects_zero_rounds() -> None:
     result = runner.invoke(app, ["generate", "--rounds", "0"])
     assert result.exit_code != 0
-    assert "--rounds" in result.output
+    # Rich styles the flag name, splitting it with colour codes when the
+    # terminal is colourised (as it is on CI), so match the plain text.
+    assert "--rounds" in _ANSI.sub("", result.output)
