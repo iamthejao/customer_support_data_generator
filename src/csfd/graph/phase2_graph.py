@@ -687,6 +687,9 @@ async def commit_dialogue_node(
             ticket_type=slot.ticket_type.value,
             turns=turns,
             turn_count=len(draft.turns),
+            # A case only closes on its last contact. The prompts ask for this, but a
+            # speaker can still claim done, and an exhausted-retry commit keeps that
+            # draft, so the rule is enforced here instead of trusted to the model.
             resolved=draft.resolved and rnd.sequence == rnd.count,
             quality_flag=state.last_quality_flag,
             created_at=datetime.now(UTC),

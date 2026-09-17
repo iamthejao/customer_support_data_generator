@@ -6,7 +6,7 @@
 -- last email's sent time. Per-message timing lives inside turns_json:
 -- `start_s` / `end_s` offsets for phone, `sent_at` timestamps for email.
 -- `end_reason` records how the dialogue loop ended (customer_done /
--- agent_done / cap_hit) for every channel.
+-- agent_done / cap_hit / dropped) for every channel.
 
 ALTER TABLE resolutions ADD COLUMN channel TEXT NOT NULL DEFAULT 'email'
     CHECK (channel IN ('email', 'phone'));
