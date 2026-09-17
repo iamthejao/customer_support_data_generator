@@ -286,6 +286,7 @@ async def _generate_turn(
         artifact_id=ticket_uid,
         role="generator",
         parent_link=link,
+        step=inputs["turn_index"],
     )
     ctx = AgentContext(
         inputs={**inputs, "prior_issues": prior_issues}, retry_attempt=state.retry_attempt

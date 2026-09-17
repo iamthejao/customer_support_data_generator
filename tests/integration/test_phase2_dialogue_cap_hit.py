@@ -39,3 +39,6 @@ def test_dialogue_cap_hit_is_unresolved(tmp_path: Path) -> None:
     assert row["turn_count"] == 4  # opening + 3 turns, then cap fires
     assert row["resolved"] is False
     assert row["quality_flag"] == "warning:turn_cap_hit"
+    # Every turn call gets its own trace row, even two agent turns in one attempt.
+    assert h.trace_count(db, node_name="agent_turn_generator") == 2
+    assert h.trace_count(db, node_name="customer_turn_generator") == 1

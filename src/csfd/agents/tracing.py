@@ -56,13 +56,17 @@ def _build_trace_record(
     status: str,
     error_class: str | None,
     error_message: str | None,
+    step: int | None = None,
 ) -> AgentTraceRecord:
     # Deterministic id so INSERT OR IGNORE is actually idempotent on
     # checkpointer resume. Uniqueness is guaranteed by the
     # (run_id, node_name, artifact_type, artifact_id, agent_role, attempt)
     # tuple — run_id is uuid4 per run, and the rest are unique within a run by
-    # construction.
+    # construction. Nodes that call the same agent several times per attempt
+    # (dialogue turns) pass ``step`` to keep each call's row distinct.
     key = f"{run_id}|{node_name}|{artifact_type}|{artifact_id}|{agent_role}|{attempt}"
+    if step is not None:
+        key += f"|{step}"
     trace_id = hashlib.sha256(key.encode("utf-8")).hexdigest()
     return AgentTraceRecord(
         id=trace_id,
@@ -175,6 +179,7 @@ async def arecord_agent_trace(
     status: str,
     error_class: str | None,
     error_message: str | None,
+    step: int | None = None,
 ) -> str:
     """Async writer used by ``TracingAdapter`` inside LangGraph node bodies."""
     record = _build_trace_record(
@@ -200,6 +205,7 @@ async def arecord_agent_trace(
         status=status,
         error_class=error_class,
         error_message=error_message,
+        step=step,
     )
     await repo.acreate(adb, record)
     return record.id
@@ -238,6 +244,7 @@ class TracingAdapter(AgentRole):
         artifact_id: str,
         role: Literal["generator", "checker"],
         parent_link: ParentLink,
+        step: int | None = None,
     ) -> None:
         self.name = inner.name
         self._inner = inner
@@ -249,6 +256,7 @@ class TracingAdapter(AgentRole):
         self._artifact_id = artifact_id
         self._role = role
         self._parent_link = parent_link
+        self._step = step
 
     async def invoke(self, ctx: AgentContext) -> BaseModel:
         parent_trace_id = (
@@ -305,6 +313,7 @@ class TracingAdapter(AgentRole):
                 status=status,
                 error_class=error_class,
                 error_message=error_message,
+                step=self._step,
             )
             if self._role == "generator":
                 self._parent_link.last_generator_trace_id = trace_id
