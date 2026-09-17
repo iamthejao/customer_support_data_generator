@@ -1,0 +1,12 @@
+commands:
+  # Mirrors .github/workflows/ci.yml exactly, so the gate and CI never diverge.
+  lint: uv run ruff check src tests && uv run ruff format --check src tests && uv run mypy src tests
+  test: uv run pytest -q --tb=short
+
+test:
+  instructions: >-
+    Run only the configured test command above. Do not improvise additional
+    checks or commands. This repo's unit and integration tests use a fake
+    chat model and stubbed embeddings (no API spend); never start a live
+    model server, call a real LLM/embedding API, or add live-model runs to
+    the pipeline.

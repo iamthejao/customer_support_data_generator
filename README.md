@@ -450,6 +450,8 @@ uv run mypy src tests # strict
 uv run ruff check src tests
 ```
 
+`.no-mistakes.yaml` declares these same lint/test commands for the no-mistakes gate, so its pipeline runs the exact commands above instead of improvising.
+
 Live LLM tests are gated behind `-m live_llm`. The retry sub-loop (generator → checker fail → re-generate → checker pass → commit) is covered end-to-end by `tests/integration/test_pipeline_retry.py`, which asserts that the retry counter advances, each checker trace links to its same-attempt generator via `parent_trace_id`, and the accepted record has no `warning:retries_exhausted` quality flag.
 
 ## Planned improvements
