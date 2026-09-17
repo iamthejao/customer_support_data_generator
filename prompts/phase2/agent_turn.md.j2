@@ -22,9 +22,9 @@ How to respond:
 - Set `done=true` when the issue is resolved (`done_reason="resolved"`), the customer is satisfied (`done_reason="customer_satisfied"`), or you must close/escalate (`done_reason="escalation"` or `"closed"`). Otherwise `done=false`.
 - Stay within your tier: a {{ inputs.ticket_type }} agent must not promise actions outside its scope.
 
-{% if prior_issues -%}
+{% if inputs.prior_issues -%}
 A prior version of this conversation failed consistency review. Address each issue:
-{% for i in prior_issues %}- {{ i }}
+{% for i in inputs.prior_issues %}- {{ i }}
 {% endfor %}
 {%- endif %}
 

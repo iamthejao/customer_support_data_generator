@@ -163,8 +163,10 @@ def test_agent_turn_renders_prior_issues_on_retry(registry: PromptRegistry) -> N
             "conversation_so_far": [],
             "turn_index": 2,
             "turn_cap": 20,
+            # _generate_turn passes prior_issues inside `inputs`, not as a
+            # top-level template variable.
+            "prior_issues": ["customer leaked root cause"],
         },
-        prior_issues=["customer leaked root cause"],
     )
     assert "customer leaked root cause" in rendered
 
