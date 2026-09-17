@@ -47,7 +47,7 @@ Contact {{ c.sequence }} ({{ c.when }}{% if c.ended == "dropped" %}, ended abrup
 {%- if inputs.round.end_mode == "follow_up" %}
 - (k) This contact must NOT resolve the case: it should end with an agreed next step (`done_reason` "follow_up"). Do not fail it for being unresolved; fail it if it declares the problem fixed.
 {%- elif inputs.round.end_mode == "dropped" %}
-- (k) This contact was cut off mid-conversation (`end_reason` "dropped"). Do not add a closing and do not fail it for ending abruptly or unresolved.
+- (k) This contact was cut off mid-conversation (`end_reason` "dropped"). Do not add a closing and do not fail it for ending abruptly or unresolved; fail it if it declares the problem fixed.
 {%- else %}
 - (k) This is the final contact: it should bring the case to a conclusion.
 {%- endif %}

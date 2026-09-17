@@ -324,7 +324,7 @@ How a case plays out:
   - how each non-final contact ends.
 - **Non-final rounds end without closing the case:**
   - `follow_up`: both speakers work toward a next step that needs time (a test the customer runs, a part, a technician visit) and end with `done_reason="follow_up"`.
-  - `dropped`: the line cuts off after a seeded number of turns. This reuses the turn-cap route with a lower per-contact cap, is recorded as `end_reason="dropped"` with no warning, and is rendered as `(call disconnected)`.
+  - `dropped`: the contact cuts off after a seeded number of turns. This reuses the turn-cap route with a lower per-contact cap and is recorded as `end_reason="dropped"` with no warning. A call renders it as `(call disconnected)`; on the email channel the thread just goes quiet, rendered as `(no further reply in this thread)`.
 - **The final round** is told to bring the case to a conclusion.
 - **Continuity.** From round 2 on, both the customer and the agent prompts get the earlier contacts' transcripts: the customer remembers them, and the agent reads them as case history. The prompts also state the time since the last contact. The caller refers back to the earlier call and keeps details such as the serial number. The agent picks up where the case left off. The consistency checker sees the same history and checks continuity, plus the planned ending (a follow-up round must not declare the problem fixed).
 - **Retries** re-roll only the current round. Rounds already committed are never regenerated.
