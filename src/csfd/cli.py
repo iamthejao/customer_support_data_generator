@@ -87,12 +87,12 @@ def db_migrate(
         help="Path to SQLite database",
     ),
 ) -> None:
-    """Apply pending SQL migrations to the runs database."""
+    """Create the runs database schema (idempotent; drops nothing)."""
     path = Path(sqlite_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     db = Database(path=path)
     apply_migrations(db)
-    typer.echo(f"Applied migrations to {path}.")
+    typer.echo(f"Created schema at {path}.")
 
 
 def _build_factory(profile: str | None) -> AgentFactory:

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from csfd.storage.db import Database
-from csfd.storage.migrations.runner import applied_versions, apply_migrations
+from csfd.storage.migrations.runner import apply_migrations
 
 
 def test_apply_migrations_creates_all_tables(tmp_db_path: Path) -> None:
@@ -23,7 +23,7 @@ def test_apply_migrations_creates_all_tables(tmp_db_path: Path) -> None:
         "resolutions",
         "lineage",
         "agent_traces",
-        "schema_migrations",
+        "problem_embeddings",
     }:
         assert required in names
 
@@ -32,7 +32,12 @@ def test_apply_migrations_is_idempotent(tmp_db_path: Path) -> None:
     db = Database(path=tmp_db_path)
     apply_migrations(db)
     apply_migrations(db)
-    assert set(applied_versions(db)) == {"001", "002", "003", "004", "005", "006", "007", "008"}
+    with db.connect() as conn:
+        names = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+    assert "runs" in names
 
 
 def test_agent_traces_accepts_claude_code_cli_provider(tmp_db_path: Path) -> None:
@@ -107,10 +112,15 @@ def test_problems_table_columns(tmp_db_path: Path) -> None:
         "resolution_hints_json",
         "quality_flag",
         "created_at",
+        "symptoms_json",
+        "root_cause_json",
+        "fault_domain",
+        "customer_impact",
+        "tags_json",
     }.issubset(cols)
 
 
-def test_005_problem_embeddings_applies_and_enforces_fk(tmp_db_path: Path) -> None:
+def test_problem_embeddings_table_and_fk(tmp_db_path: Path) -> None:
     db = Database(path=tmp_db_path)
     apply_migrations(db)
 
@@ -134,14 +144,8 @@ def test_005_problem_embeddings_applies_and_enforces_fk(tmp_db_path: Path) -> No
         )
 
 
-def test_case_rounds_migration_backfills_existing_rows(
-    tmp_db_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Rows written before 008 become single-contact cases keyed by their lineage ticket."""
-    from csfd.storage.migrations import runner
-
-    all_migrations = runner._discover()
-    monkeypatch.setattr(runner, "_discover", lambda: [m for m in all_migrations if m[0] < "008"])
+def test_case_rounds_columns_default_to_single_contact(tmp_db_path: Path) -> None:
+    """incoming_requests/resolutions default to a single-round case."""
     db = Database(path=tmp_db_path)
     apply_migrations(db)
     with sqlite3.connect(tmp_db_path) as raw:
@@ -162,18 +166,12 @@ def test_case_rounds_migration_backfills_existing_rows(
                                      problem_id, ticket_type, turns_json, turn_count,
                                      created_at)
             VALUES (1, 'r:000001:res', 'r', 1, 'p', 'l1', '[]', 0, '2026-01-01');
-            INSERT INTO lineage (ticket_uid, run_id, slot_index, problem_id, ticket_type,
-                                 customer_tier, customer_tone, incoming_request_id,
-                                 resolution_id, created_at)
-            VALUES ('r:000001', 'r', 1, 'p', 'l1', 'standard', 'neutral', 1, 1, '2026-01-01');
             """
         )
-    monkeypatch.setattr(runner, "_discover", lambda: all_migrations)
-    assert apply_migrations(db) == ["008"]
     with db.connect() as conn:
         req = conn.execute("SELECT case_uid, round_index FROM incoming_requests").fetchone()
         res = conn.execute(
             "SELECT case_uid, round_index, round_count, channel FROM resolutions"
         ).fetchone()
-    assert (req["case_uid"], req["round_index"]) == ("r:000001", 1)
-    assert tuple(res) == ("r:000001", 1, 1, "email")
+    assert (req["case_uid"], req["round_index"]) == (None, 1)
+    assert tuple(res) == (None, 1, 1, "email")
