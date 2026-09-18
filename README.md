@@ -425,7 +425,7 @@ Every run stamps:
 - `git_sha` — captured at run start via `git rev-parse HEAD` (NULL outside a git repo)
 - `config_snapshot_json` — the resolved `problem_database` + `tickets` + `validation` + `embedding` sections, plus the seed company's name
 - `stats_json` — end-of-run counts (problems, requests, resolutions, traces) plus type/tier/tone/complexity breakdowns and quality-flag distribution
-- `prompt_id` — sha256-prefix hash of the **prompt template source** (the Jinja file contents, not the per-call rendered prompt — so the id is a stable handle that changes only when a template is edited), recorded on every row in `agent_traces.prompt_id`. Each LLM call also records `model_provider`, `model_id`, `attempt`, `latency_ms`, and (for checker calls) `verdict` and `verdict_issues_json`. Token usage (`tokens_in`, `tokens_out`) is populated from LangChain's `usage_metadata` for any provider that emits it (Anthropic, OpenAI-compatible); `FakeChatModel` and the Claude CLI wrapper leave them NULL.
+- `prompt_id` — sha256-prefix hash of the **prompt template source** (the Jinja file contents, not the per-call rendered prompt — so the id is a stable handle that changes only when a template is edited), recorded on every row in `agent_traces.prompt_id`. Each LLM call also records `model_provider`, `model_id`, `attempt`, `latency_ms`, and (for checker calls) `verdict` and `verdict_issues_json`. Token usage (`tokens_in`, `tokens_out`) is populated from LangChain's `usage_metadata` for any provider that emits it (Anthropic, OpenAI-compatible); `FakeChatModel` and the Claude and Codex CLI wrappers leave them NULL.
 
 Determinism guarantee: given identical config and seed, two runs against fresh databases produce slot-by-slot identical lineage rows `(slot_index, problem_index_within_run, ticket_type, customer_tier, customer_tone, customer_name)`. Run-scoped UUIDs (`run_id` and the prefix of `problem_id` / `ticket_uid`) of course differ — the deterministic part is the per-run index suffix. The only source of additional variation are the LLM responses themselves.
 
@@ -474,7 +474,7 @@ Exports under `data/exports/<run_id>/`:
 Pre-built overlays under `config/profiles/`:
 - `claude-only.yaml` — every agent on Anthropic (default; empty overlay)
 - `claude-cli.yaml` — every agent via the local `claude` CLI (subscription auth, no API key). Requires the `claude` binary on `$PATH` and a logged-in session.
-- `codex-cli.yaml` — every agent via the local `codex` CLI (ChatGPT subscription auth, no API key). Requires the `codex` binary on `$PATH` and a logged-in session (`codex login`). Each call runs `codex exec` with a read-only sandbox, approvals disabled, and no session persistence, so codex can read the repo but never writes to it.
+- `codex-cli.yaml` — every agent via the local `codex` CLI (ChatGPT subscription auth, no API key). Requires the `codex` binary on `$PATH` and a logged-in session (`codex login`). Each call runs `codex exec` with a read-only sandbox, approvals disabled, no session persistence, and `~/.codex/config.toml` ignored (no plugins, MCP servers, or memories), so codex can read the repo but never writes to it.
 - `local-only.yaml` — every agent on Ollama (recommend ≥70B for JSON-schema decoding)
 - `mixed.yaml` — Generator on Claude, checker on local Llama
 - `dev.yaml` — small problem/ticket counts for fast iteration
