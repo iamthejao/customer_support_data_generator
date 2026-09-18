@@ -51,7 +51,7 @@ YAML that controls the deterministic shape of the run — counts, proportions, r
   - `tickets` — Phase 2 controls: `total`, `type_proportions`, `tier_proportions`, `tone_proportions_per_type`, `dialogue.turn_cap`, and `assignment_strategy` (`complexity_weighted` or `uniform`). Turn count is **emergent** — the two dialogue agents decide when the conversation is over — so there is no per-type turn target; `dialogue.turn_cap` (default 20) is only a hard safety ceiling that rarely binds. Conversation format: `channel` (`email`, the default, or `phone`; see [Conversation formats](#conversation-formats)), `phone.disfluency` (`none` / `light` / `moderate`), and `calendar` (the fixed start date, span, and business hours that seeded contact times are drawn from). `rounds` spreads a case over several related contacts (callbacks); see [Multi-call cases](#multi-call-cases-rounds).
   - `validation` — whether the combined checker runs after each generation and how its verdict gates retries.
   - `embedding` — opt-in Phase 1 dedup. When `enabled: true`, accepted candidates are embedded via an OpenAI-compatible endpoint (defaults to local Ollama at `http://localhost:11434/v1` with `embeddinggemma:300m`) and rejected if cosine similarity to any already-committed problem in the run meets or exceeds `threshold`. `dim` truncates the model's native vector (Matryoshka); `text_template` selects between `title_summary` and `title_summary_background`.
-- **`config/profiles/*.yaml`** — overlays applied on top of `default.yaml` via `--profile <name>`. Shipped overlays cover model routing (`claude-only`, `claude-cli`, `local-only`, `mixed`) and a small `dev` overlay that shrinks problem/ticket counts for fast iteration.
+- **`config/profiles/*.yaml`** — overlays applied on top of `default.yaml` via `--profile <name>`. Shipped overlays cover model routing (`claude-only`, `claude-cli`, `codex-cli`, `local-only`, `mixed`) and a small `dev` overlay that shrinks problem/ticket counts for fast iteration.
 - **`.env`** — credentials and endpoints (`ANTHROPIC_API_KEY`, `LOCAL_BASE_URL`, …) read at runtime. Not part of the deterministic snapshot.
 
 The resolved config (default + active profile) is persisted as `runs.config_snapshot_json`, so any exported dataset can be traced back to the exact inputs that produced it.
@@ -101,7 +101,7 @@ csfd export <run_id> --format transcripts                           # case_*/cal
 
 ## Walkthrough: generating each format
 
-The only thing that changes between formats is the `--channel` (and, for phone, `--disfluency`) flag on `csfd generate`; every other command is the same. The two implemented channels are `email` (written tickets) and `phone` (call transcripts) — see [Conversation formats](#conversation-formats) for what each looks like. `csfd generate` calls a real LLM (per `config/default.yaml`'s `agents` section, or a `--profile` override), so `.env` needs a working `ANTHROPIC_API_KEY`, `LOCAL_BASE_URL`, or a configured `claude_code_cli` agent before any of the walkthroughs below will actually generate data.
+The only thing that changes between formats is the `--channel` (and, for phone, `--disfluency`) flag on `csfd generate`; every other command is the same. The two implemented channels are `email` (written tickets) and `phone` (call transcripts) — see [Conversation formats](#conversation-formats) for what each looks like. `csfd generate` calls a real LLM (per `config/default.yaml`'s `agents` section, or a `--profile` override), so `.env` needs a working `ANTHROPIC_API_KEY`, `LOCAL_BASE_URL`, or a configured `claude_code_cli`/`codex_cli` agent before any of the walkthroughs below will actually generate data.
 
 ### 0. One-time setup
 
@@ -474,6 +474,7 @@ Exports under `data/exports/<run_id>/`:
 Pre-built overlays under `config/profiles/`:
 - `claude-only.yaml` — every agent on Anthropic (default; empty overlay)
 - `claude-cli.yaml` — every agent via the local `claude` CLI (subscription auth, no API key). Requires the `claude` binary on `$PATH` and a logged-in session.
+- `codex-cli.yaml` — every agent via the local `codex` CLI (ChatGPT subscription auth, no API key). Requires the `codex` binary on `$PATH` and a logged-in session (`codex login`). Each call runs `codex exec` with a read-only sandbox, approvals disabled, and no session persistence, so codex can read the repo but never writes to it.
 - `local-only.yaml` — every agent on Ollama (recommend ≥70B for JSON-schema decoding)
 - `mixed.yaml` — Generator on Claude, checker on local Llama
 - `dev.yaml` — small problem/ticket counts for fast iteration
@@ -482,7 +483,16 @@ Pre-built overlays under `config/profiles/`:
 csfd generate --profile mixed
 ```
 
-Embedding-based dedup is enabled in `local-only` and `mixed` (which run against a local Ollama instance). `claude-only`, `claude-cli`, and `dev` leave it disabled because Anthropic and the Claude CLI do not expose embedding endpoints.
+To generate a single problem with a few phone-call transcripts through the Codex subscription:
+
+```bash
+csfd generate --profile codex-cli --channel phone --problems 1 --tickets 4
+csfd export <run_id> --format transcripts
+```
+
+This produces one problem and four call-transcript cases (`tickets`) all built from that same problem, under `data/exports/<run_id>/transcripts/`.
+
+Embedding-based dedup is enabled in `local-only` and `mixed` (which run against a local Ollama instance). `claude-only`, `claude-cli`, `codex-cli`, and `dev` leave it disabled because Anthropic, the Claude CLI, and the Codex CLI do not expose embedding endpoints.
 
 ## CLI
 
