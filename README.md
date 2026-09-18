@@ -260,7 +260,7 @@ A single `csfd generate` invocation walks the parent graph from top to bottom. E
 
 15. **`finalize_run` node.** The parent graph aggregates end-of-run statistics — total problems, requests, resolutions, traces, plus type/tier/tone/complexity breakdowns and quality-flag distribution — writes `stats_json` and `completed_at` onto the `runs` row, and marks the run completed.
 
-16. **Export (separate step).** `csfd export <run_id>` reads from SQLite and writes `problems`, `incoming_requests`, `resolutions`, `lineage`, and `agent_traces` to JSONL/Parquet under `data/exports/<run_id>/`, plus a `manifest.json` with SHA-256 checksums of every file.
+16. **Export (separate step).** `csfd export <run_id>` reads from SQLite and writes the run's artifact tables and/or text transcripts under `data/exports/<run_id>/` — see [Walkthrough step 4](#4-every-artifact-not-just-transcripts) for the formats and files.
 
 Two invariants hold across the whole walk: every LLM call produces exactly one `agent_traces` row (so cost and quality are auditable per call), and Phase 2 never invents allocation decisions on the fly — the plan from step 9 fully determines what gets generated.
 
