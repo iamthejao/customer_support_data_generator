@@ -13,52 +13,16 @@ import json
 import subprocess
 from typing import Any, ClassVar
 
-import structlog
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
-from langchain_core.runnables import Runnable, RunnableLambda
-from pydantic import BaseModel, ValidationError
+from langchain_core.runnables import Runnable
+from pydantic import BaseModel
 
-_log = structlog.get_logger(__name__)
+from csfd.models._cli_common import messages_to_prompt, structured_output_runnable
 
 # Aliased to avoid an unrelated security hook's substring match.
 _spawn_subprocess = asyncio.create_subprocess_exec
-
-_STRUCTURED_SUFFIX = (
-    "\n\nRespond with a single JSON object matching this schema. "
-    "Do not include prose, explanations, or markdown code fences:\n{schema}\n"
-)
-_RETRY_PREFIX = (
-    "Your previous response was not valid JSON for the requested schema. "
-    "Reply with ONLY a JSON object - no prose, no fences.\n\n"
-)
-
-
-def _messages_to_prompt(messages: list[BaseMessage]) -> str:
-    parts: list[str] = []
-    for m in messages:
-        content = m.content if isinstance(m.content, str) else str(m.content)
-        if isinstance(m, SystemMessage):
-            parts.append(f"System: {content}")
-        elif isinstance(m, HumanMessage):
-            parts.append(content)
-        elif isinstance(m, AIMessage):
-            parts.append(f"Assistant: {content}")
-        else:
-            parts.append(content)
-    return "\n\n".join(parts)
-
-
-def _strip_code_fence(text: str) -> str:
-    s = text.strip()
-    if s.startswith("```"):
-        first_nl = s.find("\n")
-        if first_nl != -1:
-            s = s[first_nl + 1 :]
-        if s.endswith("```"):
-            s = s[:-3]
-    return s.strip()
 
 
 class ClaudeCodeCLIModel(BaseChatModel):
@@ -142,7 +106,7 @@ class ClaudeCodeCLIModel(BaseChatModel):
         run_manager: Any | None = None,
         **kwargs: Any,
     ) -> ChatResult:
-        prompt = _messages_to_prompt(messages)
+        prompt = messages_to_prompt(messages)
         text = self._run_sync(prompt)
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=text))])
 
@@ -153,7 +117,7 @@ class ClaudeCodeCLIModel(BaseChatModel):
         run_manager: Any | None = None,
         **kwargs: Any,
     ) -> ChatResult:
-        prompt = _messages_to_prompt(messages)
+        prompt = messages_to_prompt(messages)
         text = await self._run_async(prompt)
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=text))])
 
@@ -162,52 +126,9 @@ class ClaudeCodeCLIModel(BaseChatModel):
         schema: type[BaseModel],
         **kwargs: Any,
     ) -> Runnable[Any, BaseModel]:
-        schema_json = json.dumps(schema.model_json_schema(), indent=2)
-        suffix = _STRUCTURED_SUFFIX.format(schema=schema_json)
-
-        def _prompt_from_input(inp: Any) -> str:
-            if isinstance(inp, str):
-                base = inp
-            elif isinstance(inp, list):
-                base = _messages_to_prompt(inp)
-            elif isinstance(inp, BaseMessage):
-                base = _messages_to_prompt([inp])
-            else:
-                base = str(inp)
-            return base + suffix
-
-        def _parse(text: str) -> BaseModel:
-            return schema.model_validate(json.loads(_strip_code_fence(text)))
-
-        async def _arun(inp: Any) -> BaseModel:
-            prompt = _prompt_from_input(inp)
-            text = await self._run_async(prompt)
-            try:
-                return _parse(text)
-            except (json.JSONDecodeError, ValidationError) as e:
-                _log.warning(
-                    "claude_cli.structured.retry",
-                    error=repr(e),
-                    preview=text[:200],
-                )
-                retry_text = await self._run_async(_RETRY_PREFIX + prompt)
-                return _parse(retry_text)
-
-        def _run(inp: Any) -> BaseModel:
-            prompt = _prompt_from_input(inp)
-            text = self._run_sync(prompt)
-            try:
-                return _parse(text)
-            except (json.JSONDecodeError, ValidationError) as e:
-                _log.warning(
-                    "claude_cli.structured.retry",
-                    error=repr(e),
-                    preview=text[:200],
-                )
-                retry_text = self._run_sync(_RETRY_PREFIX + prompt)
-                return _parse(retry_text)
-
-        return RunnableLambda(_run, afunc=_arun)
+        return structured_output_runnable(
+            schema, self._run_sync, self._run_async, "claude_cli.structured.retry"
+        )
 
 
 __all__ = ["ClaudeCodeCLIModel"]

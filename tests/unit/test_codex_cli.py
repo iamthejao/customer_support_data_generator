@@ -8,6 +8,8 @@ would have written is pre-populated before the model reads it back.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from typing import Any
 
 import pytest
@@ -85,6 +87,7 @@ async def test_agenerate_reads_last_message_and_returns_ai_message(
     assert "--sandbox" in argv
     assert "read-only" in argv
     assert "--ephemeral" in argv
+    assert "--ignore-user-config" in argv
     assert "--model" in argv
     assert "gpt-5.6-sol" in argv
     assert "--output-last-message" in argv
@@ -171,3 +174,17 @@ async def test_empty_last_message_raises_runtime_error(
     llm = CodexCLIModel()
     with pytest.raises(RuntimeError, match="empty"):
         await llm._agenerate([HumanMessage(content="hi")])
+
+
+def test_sync_timeout_removes_output_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[str] = []
+
+    def fake_run(argv: list[str], **kwargs: Any) -> None:
+        seen.append(argv[argv.index("--output-last-message") + 1])
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    monkeypatch.setattr(cc.subprocess, "run", fake_run)
+    with pytest.raises(subprocess.TimeoutExpired):
+        CodexCLIModel(timeout_s=1)._generate([HumanMessage(content="hi")])
+    assert seen
+    assert not os.path.exists(seen[0])
