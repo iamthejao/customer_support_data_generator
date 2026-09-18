@@ -183,7 +183,7 @@ def test_sync_timeout_removes_output_file(monkeypatch: pytest.MonkeyPatch) -> No
         seen.append(argv[argv.index("--output-last-message") + 1])
         raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
 
-    monkeypatch.setattr(cc.subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "run", fake_run)
     with pytest.raises(subprocess.TimeoutExpired):
         CodexCLIModel(timeout_s=1)._generate([HumanMessage(content="hi")])
     assert seen
