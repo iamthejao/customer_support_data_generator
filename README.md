@@ -99,6 +99,64 @@ csfd generate --channel phone --rounds 3 --problems 5 --tickets 10  # 10 cases x
 csfd export <run_id> --format transcripts                           # case_*/call_01.txt … call_03.txt
 ```
 
+## Walkthrough: generating each format
+
+The only thing that changes between formats is the `--channel` (and, for phone, `--disfluency`) flag on `csfd generate`; every other command is the same. The two implemented channels are `email` (written tickets) and `phone` (call transcripts) — see [Conversation formats](#conversation-formats) for what each looks like. `csfd generate` calls a real LLM (per `config/default.yaml`'s `agents` section, or a `--profile` override), so `.env` needs a working `ANTHROPIC_API_KEY`, `LOCAL_BASE_URL`, or a configured `claude_code_cli` agent before any of the walkthroughs below will actually generate data.
+
+### 0. One-time setup
+
+```bash
+uv sync
+cp .env.example .env             # then fill in ANTHROPIC_API_KEY or LOCAL_BASE_URL
+csfd init                        # scaffolds seeds/company_seed.md, seeds/scenarios_seed.md, data/, .env.example
+csfd db-migrate                  # creates data/runs.sqlite fresh (idempotent — safe to re-run)
+```
+
+`csfd init` and `csfd db-migrate` never touch the network. `db-migrate` can be re-run against the same file at any point (before or after `generate`) without side effects — it only creates tables/indexes that don't already exist.
+
+### 1. Email tickets (default channel)
+
+```bash
+csfd generate --seed 42 --problems 5 --tickets 20                  # channel defaults to "email"; prints the run id
+csfd export <run_id> --format transcripts                          # writes data/exports/<run_id>/transcripts/
+```
+
+Output: `data/exports/<run_id>/transcripts/cases.jsonl` (one line per case) plus one `case_NNNNNN/` folder per case, each with `case.json` (case metadata) and `email_01.txt` (the rendered thread — `email_02.txt`, … for cases with more than one round).
+
+### 2. Phone calls
+
+```bash
+csfd generate --channel phone --seed 42 --problems 5 --tickets 20        # spoken calls instead of written tickets
+csfd export <run_id> --format transcripts                                # writes data/exports/<run_id>/transcripts/
+```
+
+Output layout is identical to email, except each contact file is `call_01.txt` (per-utterance `[HH:MM:SS]` timestamps; pass `--no-timestamps` on `export` to drop them). Add `--disfluency none|light|moderate` to `generate` to control caller filler/restarts (default `light`).
+
+### 3. Multi-contact cases (callbacks)
+
+Add `--rounds N` to either channel to make every case N related contacts instead of one (see [Multi-call cases](#multi-call-cases-rounds) for how non-final rounds end and what changes in the prompts):
+
+```bash
+csfd generate --channel phone --rounds 3 --seed 42 --problems 5 --tickets 10   # 10 cases x 3 calls = 30 contacts
+csfd export <run_id> --format transcripts
+```
+
+Output: the same `case_NNNNNN/` folders, now each holding `call_01.txt` … `call_03.txt` (or `email_01.txt` … for the email channel) in contact order, plus `case.json`'s `contacts` list with per-contact timing and `end_reason`.
+
+### 4. Every artifact, not just transcripts
+
+`--format transcripts` only exports the text view. For the underlying tables:
+
+```bash
+csfd export <run_id> --format jsonl     # data/exports/<run_id>/{problems,incoming_requests,resolutions,lineage,agent_traces,problem_embeddings}.jsonl
+csfd export <run_id> --format parquet   # same tables as .parquet
+csfd export <run_id> --format both      # jsonl + parquet
+csfd export <run_id> --format all       # jsonl + parquet + transcripts
+csfd inspect <run_id>                   # prints per-artifact row counts for a quick sanity check
+```
+
+Any `export` that includes `jsonl` (`jsonl`, `both`, or `all`) also writes `data/exports/<run_id>/manifest.json` (file checksums, for pinning a dataset version); `parquet`- or `transcripts`-only exports do not.
+
 ## Architecture
 
 The pipeline is a LangGraph parent graph composed of two phase subgraphs. The parent sequences `init_run` → Phase 1 subgraph → Phase 2 subgraph → `finalize_run`; each subgraph contains its own per-artifact retry sub-loop and outer iteration loop. All three graphs share a single `PipelineState` Pydantic model defined in `src/csfd/graph/pipeline_graph.py`.
