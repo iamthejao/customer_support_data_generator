@@ -1,4 +1,5 @@
--- Full CSFD storage schema, created fresh for every run.
+-- Full CSFD storage schema. Every statement is IF NOT EXISTS, so applying it
+-- to an existing database (db-migrate, and every `generate`) drops nothing.
 --
 -- Tables:
 --   * runs               — one row per pipeline run
