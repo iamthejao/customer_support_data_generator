@@ -109,7 +109,7 @@ The only thing that changes between formats is the `--channel` (and, for phone, 
 uv sync
 cp .env.example .env             # then fill in ANTHROPIC_API_KEY or LOCAL_BASE_URL
 csfd init                        # scaffolds seeds/company_seed.md, seeds/scenarios_seed.md, data/, .env.example
-csfd db-migrate                  # creates data/runs.sqlite fresh (idempotent — safe to re-run)
+csfd db-migrate                  # creates data/runs.sqlite if missing (idempotent — safe to re-run)
 ```
 
 `csfd init` and `csfd db-migrate` never touch the network. `db-migrate` can be re-run against the same file at any point (before or after `generate`) without side effects — it only creates tables/indexes that don't already exist.
