@@ -8,6 +8,7 @@ end-to-end behaviour is covered by
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from langgraph.graph.state import CompiledStateGraph
 from csfd.agents.base import Verdict
 from csfd.agents.factory import AgentFactory
 from csfd.graph.phase2_graph import (
+    _mark_cap_hit_node,
     _route_after_agent_turn,
     _route_after_build_allocation_plan,
     _route_after_commit_resolution,
@@ -25,7 +27,7 @@ from csfd.graph.phase2_graph import (
     _route_after_validate_conversation,
     build_phase2_subgraph,
 )
-from csfd.graph.pipeline_graph import PipelineState, _PlanSlot
+from csfd.graph.pipeline_graph import PipelineState, _PlanSlot, _RoundSpec
 from csfd.models.fake import FakeChatModel
 from csfd.prompts.registry import PromptHandle, PromptRegistry
 from csfd.seeds.company import CompanyProfile
@@ -263,3 +265,37 @@ def test_build_phase2_subgraph_compiles_with_expected_nodes(tmp_path: Path) -> N
         "_mark_validation_skipped",
     }
     assert expected.issubset(node_names)
+
+
+def _slot_with_drop(drop_after: int | None) -> _PlanSlot:
+    return _plan_slot(1).model_copy(
+        update={
+            "rounds": [
+                _RoundSpec(sequence=1, count=2, end_mode="dropped", drop_after_turns=drop_after),
+                _RoundSpec(sequence=2, count=2),
+            ]
+        }
+    )
+
+
+def test_planned_drop_lowers_the_cap_for_that_contact_only() -> None:
+    slot = _slot_with_drop(4)
+    first = _make_state(
+        plan_slots=[slot], current_dialogue_turns=_dialogue_turns(4), dialogue_turn_cap=20
+    )
+    assert _route_after_agent_turn(first) == "cap"
+    assert _route_after_customer_turn(first) == "cap"
+    second = first.model_copy(update={"round_index": 1})
+    assert _route_after_agent_turn(second) == "customer"
+
+
+def test_mark_cap_hit_distinguishes_planned_drop() -> None:
+    dropped = _make_state(
+        plan_slots=[_slot_with_drop(4)], current_dialogue_turns=_dialogue_turns(4)
+    )
+    assert asyncio.run(_mark_cap_hit_node(dropped)) == {"dialogue_end_reason": "dropped"}
+    runaway = _make_state(plan_slots=[_plan_slot(1)], current_dialogue_turns=_dialogue_turns(20))
+    assert asyncio.run(_mark_cap_hit_node(runaway)) == {
+        "dialogue_end_reason": "cap_hit",
+        "last_quality_flag": "warning:turn_cap_hit",
+    }

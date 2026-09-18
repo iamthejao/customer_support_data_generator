@@ -5,6 +5,15 @@ Your symptoms (all you know):
 {% endfor %}
 Impact on you: {{ inputs.customer_impact }}
 Your tone (keep consistent): {{ inputs.customer_tone }}
+{%- if inputs.case_history %}
+
+You have contacted support about this problem before. Your earlier exchanges (you remember them):
+{% for c in inputs.case_history %}
+Contact {{ c.sequence }} — {{ c.when }}{% if c.ended == "dropped" %} (the exchange stopped before it reached a conclusion){% elif c.ended == "cap_hit" %} (the exchange went back and forth and ended without a conclusion){% elif c.ended == "frustrated" %} (you broke off the exchange, unhappy){% elif c.ended == "follow_up" %} (it ended with a next step you agreed to){% else %} (it ended without fixing the problem){% endif %}:
+{% for t in c.turns %}{{ t.speaker }}: {{ t.content }}
+{% endfor %}{% endfor %}
+It is now {{ inputs.round.since_previous }} since that last exchange, and the problem is not solved yet.
+{%- endif %}
 
 Conversation so far (turn {{ inputs.turn_index }} of at most {{ inputs.turn_cap }}):
 {% for t in inputs.conversation_so_far %}{{ t.speaker }}: {{ t.content }}
@@ -15,6 +24,17 @@ How to respond:
 - If the agent's question is ambiguous, it is realistic to misunderstand it or ask what they mean — this is allowed and encouraged occasionally.
 - Short conversations are correct for simple problems. If the agent's solution clearly addresses what you described, acknowledge it and set `done=true`. Don't invent extra questions.
 - Set `done=true` when satisfied (`done_reason="customer_satisfied"`), when told it's fixed (`done_reason="resolved"`), or when leaving unhappy (`done_reason="customer_frustrated"`). Otherwise `done=false`.
+{%- if inputs.round %}
+
+This is contact {{ inputs.round.sequence }} of {{ inputs.round.count }} about this problem. Override for this contact:
+{%- if inputs.round.end_mode == "follow_up" %}
+- It will end with an agreed next step, not a fix. Once the agent has given you something to try, or arranged a visit or a part, agree and end the contact with `done=true` and `done_reason="follow_up"`. Don't say the problem is fixed.
+{%- elif inputs.round.end_mode == "dropped" %}
+- Keep going with the agent; do not end the contact or set `done=true`.
+{%- else %}
+- This should be the last time you need to get in touch: stay until the problem is resolved or the agent closes or escalates it.
+{%- endif %}
+{%- endif %}
 
 Output contract — return one turn:
 - `speaker`: always "customer".

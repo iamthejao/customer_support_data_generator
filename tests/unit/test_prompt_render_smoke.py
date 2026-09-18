@@ -10,10 +10,13 @@ templates MUST contain in the corresponding conditional branch. They
 double as a contract between this test and the templates.
 """
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
+from csfd.graph.phase2_graph import EndedLabel
 from csfd.prompts.registry import PromptRegistry
 
 
@@ -163,8 +166,10 @@ def test_agent_turn_renders_prior_issues_on_retry(registry: PromptRegistry) -> N
             "conversation_so_far": [],
             "turn_index": 2,
             "turn_cap": 20,
+            # _generate_turn passes prior_issues inside `inputs`, not as a
+            # top-level template variable.
+            "prior_issues": ["customer leaked root cause"],
         },
-        prior_issues=["customer leaked root cause"],
     )
     assert "customer leaked root cause" in rendered
 
@@ -193,3 +198,207 @@ def test_consistency_check_renders_complexity(registry: PromptRegistry) -> None:
         }
     )
     assert "simple" in rendered
+
+
+# ---------- Phase 2: phone-call prompts ----------
+
+
+def _phone_customer_inputs(disfluency: str) -> dict[str, object]:
+    return {
+        "company_name": "CoolTherm",
+        "agent_greeting": "Thank you for calling CoolTherm support, this is Agent-l1-0001.",
+        "customer_name": "Customer-standard-0001",
+        "customer_tier": "standard",
+        "customer_tone": "frustrated",
+        "ticket_type": "l1",
+        "category": "cooling",
+        "symptoms": ["unit power-cycles every 20 minutes"],
+        "customer_impact": "degraded",
+        "disfluency": disfluency,
+        "conversation_so_far": [
+            {"speaker": "agent", "content": "Can I get the serial number?"},
+        ],
+        "turn_index": 3,
+        "turn_cap": 20,
+    }
+
+
+@pytest.mark.parametrize("prompt", ["phase2.phone_incoming_request", "phase2.phone_customer_turn"])
+def test_phone_customer_prompts_render_disfluency_branch(
+    registry: PromptRegistry, prompt: str
+) -> None:
+    template = registry.get(prompt).template
+    renders = {
+        level: template.render(inputs=_phone_customer_inputs(level))
+        for level in ("none", "light", "moderate")
+    }
+    assert len(set(renders.values())) == 3
+    for rendered in renders.values():
+        assert "unit power-cycles every 20 minutes" in rendered
+        assert "Customer-standard-0001" in rendered
+
+
+def test_phone_incoming_request_shows_greeting(registry: PromptRegistry) -> None:
+    rendered = registry.get("phase2.phone_incoming_request").template.render(
+        inputs=_phone_customer_inputs("light")
+    )
+    assert "AGENT: Thank you for calling CoolTherm support, this is Agent-l1-0001." in rendered
+
+
+def test_phone_customer_turn_renders_uppercase_speakers(registry: PromptRegistry) -> None:
+    rendered = registry.get("phase2.phone_customer_turn").template.render(
+        inputs=_phone_customer_inputs("light")
+    )
+    assert "AGENT: Can I get the serial number?" in rendered
+
+
+def _phone_agent_inputs(disfluency: str) -> dict[str, object]:
+    return {
+        "company_name": "CoolTherm",
+        "agent_name": "Agent-l2-0004",
+        "ticket_type": "l2",
+        "problem": {
+            "title": "t",
+            "summary": "s",
+            "background": "b",
+            "category": "c",
+            "fault_domain": "hardware",
+            "root_cause": ["loose PSU connector"],
+            "resolution_hint": "reseat",
+        },
+        "disfluency": disfluency,
+        "conversation_so_far": [{"speaker": "customer", "content": "It keeps tripping."}],
+        "turn_index": 3,
+        "turn_cap": 20,
+        "prior_issues": ["agent read the root cause aloud"],
+    }
+
+
+def test_phone_agent_turn_renders_call_flow(registry: PromptRegistry) -> None:
+    template = registry.get("phase2.phone_agent_turn").template
+    renders = {
+        level: template.render(inputs=_phone_agent_inputs(level))
+        for level in ("none", "light", "moderate")
+    }
+    assert len(set(renders.values())) == 3
+    for rendered in renders.values():
+        assert "loose PSU connector" in rendered
+        assert "CUSTOMER: It keeps tripping." in rendered
+        assert "agent read the root cause aloud" in rendered
+
+
+def test_consistency_check_phone_block_only_for_phone(registry: PromptRegistry) -> None:
+    handle = registry.get("phase2.conversation_consistency_check")
+    base = {
+        "customer_tone": "neutral",
+        "problem": {"symptoms": [], "root_cause": []},
+        "candidate": {"subject": "s", "body": "b", "end_reason": "agent_done", "turns": []},
+    }
+    phone = handle.template.render(inputs={**base, "channel": "phone"})
+    email = handle.template.render(inputs={**base, "channel": "email"})
+    assert phone != email
+    assert email == handle.template.render(inputs=base)
+
+
+# ---------- Phase 2: how an earlier contact of the same case ended ----------
+
+_ENDED_LABELS = ("dropped", "cap_hit", "frustrated", "follow_up", "unresolved")
+
+
+def _email_customer_inputs() -> dict[str, object]:
+    return {
+        "company_name": "CoolTherm",
+        "customer_name": "Customer-standard-0001",
+        "customer_tier": "standard",
+        "customer_tone": "neutral",
+        "ticket_type": "l1",
+        "category": "cooling",
+        "symptoms": ["unit power-cycles every 20 minutes"],
+        "customer_impact": "degraded",
+        "conversation_so_far": [{"speaker": "agent", "content": "Can you describe the noise?"}],
+        "turn_index": 3,
+        "turn_cap": 20,
+    }
+
+
+def _email_agent_inputs() -> dict[str, object]:
+    return {
+        "company_name": "CoolTherm",
+        "agent_name": "Agent-l2-0004",
+        "ticket_type": "l2",
+        "problem": {
+            "title": "t",
+            "summary": "s",
+            "background": "b",
+            "category": "c",
+            "fault_domain": "hardware",
+            "root_cause": ["loose PSU connector"],
+            "resolution_hint": "reseat",
+        },
+        "conversation_so_far": [{"speaker": "customer", "content": "It keeps tripping."}],
+        "turn_index": 3,
+        "turn_cap": 20,
+        "prior_issues": [],
+    }
+
+
+def _checker_inputs() -> dict[str, object]:
+    return {
+        "company_name": "CoolTherm",
+        "customer_tone": "neutral",
+        "problem": {"symptoms": [], "root_cause": []},
+        "candidate": {"subject": "s", "body": "b", "end_reason": "agent_done", "turns": []},
+    }
+
+
+_CASE_HISTORY_PROMPTS: dict[str, Callable[[], dict[str, object]]] = {
+    "phase2.incoming_request": _email_customer_inputs,
+    "phase2.customer_turn": _email_customer_inputs,
+    "phase2.agent_turn": _email_agent_inputs,
+    "phase2.phone_incoming_request": lambda: _phone_customer_inputs("light"),
+    "phase2.phone_customer_turn": lambda: _phone_customer_inputs("light"),
+    "phase2.phone_agent_turn": lambda: _phone_agent_inputs("light"),
+    "phase2.conversation_consistency_check": _checker_inputs,
+}
+
+
+def _with_case_history(base: dict[str, object], ended: str) -> dict[str, object]:
+    return {
+        **base,
+        "round": {"sequence": 2, "count": 2, "end_mode": "final", "since_previous": "about a day"},
+        "case_history": [
+            {
+                "sequence": 1,
+                "when": "Mon 05 Jan 2026, 09:00",
+                "ended": ended,
+                "turns": [{"speaker": "customer", "content": "It keeps restarting."}],
+            }
+        ],
+    }
+
+
+def test_case_history_labels_cover_every_value_the_graph_emits() -> None:
+    assert set(get_args(EndedLabel)) == set(_ENDED_LABELS)
+
+
+@pytest.mark.parametrize("prompt", sorted(_CASE_HISTORY_PROMPTS))
+def test_case_history_end_labels_render_distinctly(registry: PromptRegistry, prompt: str) -> None:
+    """Each way an earlier contact can end reaches the prompt as its own description."""
+    template = registry.get(prompt).template
+    base = _CASE_HISTORY_PROMPTS[prompt]()
+    renders = {
+        label: template.render(inputs=_with_case_history(base, label)) for label in _ENDED_LABELS
+    }
+    assert len(set(renders.values())) == len(_ENDED_LABELS)
+    for rendered in renders.values():
+        assert "It keeps restarting." in rendered
+
+
+@pytest.mark.parametrize("prompt", sorted(_CASE_HISTORY_PROMPTS))
+def test_single_contact_render_has_no_case_history(registry: PromptRegistry, prompt: str) -> None:
+    """A case with one contact renders exactly as it did before rounds existed."""
+    template = registry.get(prompt).template
+    base = _CASE_HISTORY_PROMPTS[prompt]()
+    assert template.render(inputs=base) == template.render(
+        inputs={**base, "round": None, "case_history": []}
+    )

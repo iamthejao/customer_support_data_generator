@@ -13,7 +13,16 @@ information-asymmetric agents:
 
 Turn 1 is the customer's opening message (the standalone incoming request).
 Turns then alternate, starting with the service agent, until whichever speaker
-just spoke flags ``done`` — or a hard ``dialogue.turn_cap`` is reached. A
+just spoke flags ``done`` — or a hard ``dialogue.turn_cap`` is reached. With
+``tickets.channel == "phone"`` the same loop runs on the ``phone_*`` prompts:
+turn 1 is the agent's scripted greeting (see :mod:`csfd.calls`), turn 2 the
+caller's opening, and per-utterance timings are estimated at commit.
+
+A slot is one *case*. With ``tickets.rounds`` configured, a case spans several
+contacts (see :mod:`csfd.rounds`): after a non-final contact commits, the loop
+re-enters ``generate_incoming_request`` for the same slot with the committed
+contacts as case history. A planned ``dropped`` contact reuses the turn-cap
+route with a lower per-contact cap and ends with ``end_reason="dropped"``. A
 consistency agent then reviews the full transcript and may pass it, pass it
 with edits, or fail it (a fail re-rolls the whole conversation within the
 existing retry budget). The subgraph shares
@@ -59,7 +68,7 @@ Subgraph topology:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any, Literal
 
@@ -70,7 +79,13 @@ from csfd.agents.base import AgentContext, Issue, Verdict
 from csfd.agents.factory import AgentFactory
 from csfd.agents.tracing import ParentLink, TracingAdapter
 from csfd.allocator import ProblemRef, build_allocation_plan
-from csfd.graph.pipeline_graph import PipelineState, _PlanSlot
+from csfd.calls import (
+    describe_gap,
+    estimate_email_times,
+    estimate_turn_timings,
+    scripted_greeting,
+)
+from csfd.graph.pipeline_graph import PipelineState, _PlanSlot, _PriorContact, _RoundSpec
 from csfd.pipeline import (
     ConsistencyVerdict,
     DialogueTurnOutput,
@@ -79,6 +94,7 @@ from csfd.pipeline import (
     _apply_consistency_edits,
     _assemble_resolution,
 )
+from csfd.rounds import assign_round_counts, contact_label, plan_case_rounds
 from csfd.settings import AppSettings
 from csfd.storage.db import Database
 from csfd.storage.db_async import AsyncDatabase
@@ -91,6 +107,7 @@ from csfd.storage.repository import (
     ResolutionRepo,
 )
 from csfd.ticket_types.definitions import ProblemComplexity
+from csfd.utils.rng import derive_rng
 
 # --------------------------------------------------------------------------- #
 # Input builders (enforce information asymmetry at the prompt boundary)
@@ -102,29 +119,120 @@ def _render_history(turns: list[DialogueTurnOutput]) -> list[dict[str, str]]:
     return [{"speaker": t.speaker, "content": t.content} for t in turns]
 
 
+def _customer_name(slot: _PlanSlot) -> str:
+    return f"Customer-{slot.tier}-{slot.index:04d}"
+
+
+def _agent_name(slot: _PlanSlot) -> str:
+    """The one agent who handles this case — every round of a case shares it."""
+    return f"Agent-{slot.ticket_type.value}-{slot.index:04d}"
+
+
+def _current_round(state: PipelineState, slot: _PlanSlot) -> _RoundSpec:
+    """The contact being generated; a slot without a round plan is one final contact."""
+    return slot.rounds[state.round_index] if slot.rounds else _RoundSpec()
+
+
+def _contact_key(state: PipelineState, slot: _PlanSlot, rnd: _RoundSpec) -> str:
+    """Stable id of one contact: the case's ticket_uid, suffixed for rounds after the first."""
+    ticket_uid = f"{state.run_id}:{slot.index:06d}"
+    return ticket_uid if rnd.sequence == 1 else f"{ticket_uid}:r{rnd.sequence:02d}"
+
+
+def _effective_turn_cap(state: PipelineState) -> int:
+    """The dialogue cap for the current contact: a planned drop cuts it short."""
+    cap = state.dialogue_turn_cap
+    if state.slot_index < len(state.plan_slots):
+        rnd = _current_round(state, state.plan_slots[state.slot_index])
+        if rnd.drop_after_turns is not None:
+            return min(cap, rnd.drop_after_turns)
+    return cap
+
+
+# How an earlier contact of the same case finished, as the next round's prompts
+# describe it. "follow_up" is reserved for a contact that really did agree a next
+# step; everything else that ended without one gets its own label.
+EndedLabel = Literal["dropped", "cap_hit", "frustrated", "follow_up", "unresolved"]
+
+
+def _ended_label(contact: _PriorContact) -> EndedLabel:
+    """Describe how an already-committed contact of this case ended."""
+    if contact.end_reason == "dropped":
+        return "dropped"
+    if contact.end_reason == "cap_hit":
+        return "cap_hit"
+    last_reason = contact.turns[-1].done_reason if contact.turns else None
+    if last_reason == "customer_frustrated":
+        return "frustrated"
+    if last_reason == "follow_up":
+        return "follow_up"
+    return "unresolved"
+
+
+def _round_inputs(state: PipelineState, rnd: _RoundSpec) -> dict[str, Any]:
+    """Round context + earlier contacts for multi-contact cases; empty for single contacts.
+
+    Both speakers see the earlier transcripts: the customer lived through them
+    and the agent reads them from the case history, so no hidden fields leak.
+    """
+    if rnd.count <= 1:
+        return {}
+    since_previous = None
+    if state.case_history and rnd.started_at is not None:
+        prev = state.case_history[-1]
+        prev_end = prev.ended_at or prev.started_at
+        if prev_end is not None:
+            since_previous = describe_gap((rnd.started_at - prev_end).total_seconds())
+    return {
+        "round": {
+            "sequence": rnd.sequence,
+            "count": rnd.count,
+            "end_mode": rnd.end_mode,
+            "since_previous": since_previous or "some time",
+        },
+        "case_history": [
+            {
+                "sequence": c.sequence,
+                "when": c.started_at.strftime("%a %d %b %Y, %H:%M") if c.started_at else "earlier",
+                "ended": _ended_label(c),
+                "turns": _render_history(c.turns),
+            }
+            for c in state.case_history
+        ],
+    }
+
+
+def _prompt_name(settings: AppSettings, base: str) -> str:
+    """Resolve a Phase 2 prompt for the configured channel (``phone_*`` variants)."""
+    prefix = "phone_" if settings.tickets.channel == "phone" else ""
+    return f"phase2.{prefix}{base}"
+
+
 def _customer_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
     """Customer-view inputs: symptoms + impact + persona only. No root cause."""
     problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
     return {
         "company_name": state.company.name,
         "ticket_type": slot.ticket_type.value,
-        "customer_name": f"Customer-{slot.tier}-{slot.index:04d}",
+        "customer_name": _customer_name(slot),
         "customer_tier": slot.tier,
         "customer_tone": slot.tone,
         "symptoms": problem.symptoms,
         "customer_impact": problem.customer_impact,
         "category": problem.category,
-        "turn_cap": state.dialogue_turn_cap,
+        "turn_cap": _effective_turn_cap(state),
+        **_round_inputs(state, _current_round(state, slot)),
     }
 
 
 def _agent_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
     """Service-view inputs: root cause + diagnostic context. No symptoms list, no tone."""
     problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
+    rnd = _current_round(state, slot)
     return {
         "company_name": state.company.name,
         "ticket_type": slot.ticket_type.value,
-        "agent_name": f"Agent-{slot.ticket_type.value}-{slot.index:04d}",
+        "agent_name": _agent_name(slot),
         "problem": {
             "title": problem.title,
             "summary": problem.summary,
@@ -134,7 +242,8 @@ def _agent_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
             "root_cause": problem.root_cause,
             "resolution_hint": problem.resolution_hints.get(slot.ticket_type.value, ""),
         },
-        "turn_cap": state.dialogue_turn_cap,
+        "turn_cap": _effective_turn_cap(state),
+        **_round_inputs(state, rnd),
     }
 
 
@@ -183,6 +292,10 @@ async def build_allocation_plan_node(
             ),
         )
 
+    seed = settings.pipeline.run_seed or 0
+    round_counts = assign_round_counts(
+        [s.index for s in plan.slots], tickets_cfg.rounds.proportions, seed=seed
+    )
     pydantic_slots = [
         _PlanSlot(
             index=s.index,
@@ -190,12 +303,32 @@ async def build_allocation_plan_node(
             ticket_type=s.ticket_type,
             tier=s.tier,
             tone=s.tone,
+            rounds=[
+                _RoundSpec(
+                    sequence=r.sequence,
+                    count=r.count,
+                    started_at=r.started_at,
+                    end_mode=r.end_mode,
+                    drop_after_turns=r.drop_after_turns,
+                )
+                for r in plan_case_rounds(
+                    slot_index=s.index,
+                    round_count=round_counts[s.index],
+                    rounds=tickets_cfg.rounds,
+                    calendar=tickets_cfg.calendar,
+                    seed=seed,
+                    opening_turns=2 if tickets_cfg.channel == "phone" else 1,
+                    turn_cap=tickets_cfg.dialogue.turn_cap,
+                )
+            ],
         )
         for s in plan.slots
     ]
     return {
         "plan_slots": pydantic_slots,
         "slot_index": 0,
+        "round_index": 0,
+        "case_history": [],
         "dialogue_turn_cap": settings.tickets.dialogue.turn_cap,
     }
 
@@ -208,15 +341,32 @@ async def generate_incoming_request_node(
     adb: AsyncDatabase,
     settings: AppSettings,
 ) -> dict[str, Any]:
-    """LLM call: customer's opening message. Seeds turn 1 (customer)."""
+    """LLM call: customer's opening message. Seeds turn 1 (customer).
+
+    On the phone channel the agent's scripted greeting is prepended as turn 1
+    (no LLM call) and the caller's opening becomes turn 2.
+    """
     slot = state.plan_slots[state.slot_index]
-    ticket_uid = f"{state.run_id}:{slot.index:06d}"
+    rnd = _current_round(state, slot)
+    contact_key = _contact_key(state, slot, rnd)
     inputs = _customer_inputs(state, slot)
+    opening: list[DialogueTurnOutput] = []
+    if settings.tickets.channel == "phone":
+        assert rnd.started_at is not None, "build_allocation_plan must schedule the call"
+        greeting = scripted_greeting(
+            company=state.company.name,
+            agent=_agent_name(slot),
+            at=rnd.started_at,
+            rng=derive_rng(state.run_seed, f"{contact_label(slot.index, rnd.sequence)}:greeting"),
+        )
+        opening.append(DialogueTurnOutput(speaker="agent", content=greeting, done=False))
+        inputs["agent_greeting"] = greeting
+        inputs["disfluency"] = settings.tickets.phone.disfluency
 
     link = ParentLink()
     generator = factory.build_generator(
         name="incoming_request_generator",
-        prompt_name="phase2.incoming_request",
+        prompt_name=_prompt_name(settings, "incoming_request"),
         output_schema_factory=lambda: IncomingRequestOutput,
     )
     traced = TracingAdapter(
@@ -226,16 +376,16 @@ async def generate_incoming_request_node(
         run_id=state.run_id,
         node_name="incoming_request_generator",
         artifact_type="resolution",
-        artifact_id=ticket_uid,
+        artifact_id=contact_key,
         role="generator",
         parent_link=link,
     )
     result = await traced.invoke(AgentContext(inputs=inputs, retry_attempt=state.retry_attempt))
     assert isinstance(result, IncomingRequestOutput)
-    turn0 = DialogueTurnOutput(speaker="customer", content=result.body, done=False)
+    opening.append(DialogueTurnOutput(speaker="customer", content=result.body, done=False))
     return {
         "current_resolution_draft": ResolutionOutput(subject=result.subject, body=result.body),
-        "current_dialogue_turns": [turn0],
+        "current_dialogue_turns": opening,
         "dialogue_last_speaker": "customer",
         "dialogue_done": False,
         "dialogue_end_reason": None,
@@ -249,19 +399,24 @@ async def _generate_turn(
     factory: AgentFactory,
     db: Database,
     adb: AsyncDatabase,
+    settings: AppSettings,
     speaker: Literal["customer", "agent"],
 ) -> dict[str, Any]:
     """Shared body for the customer / agent turn nodes: one LLM call, one appended turn."""
     slot = state.plan_slots[state.slot_index]
-    ticket_uid = f"{state.run_id}:{slot.index:06d}"
+    contact_key = _contact_key(state, slot, _current_round(state, slot))
     if speaker == "customer":
-        node_name, prompt_name = "customer_turn_generator", "phase2.customer_turn"
+        node_name = "customer_turn_generator"
+        prompt_name = _prompt_name(settings, "customer_turn")
         inputs = _customer_inputs(state, slot)
     else:
-        node_name, prompt_name = "agent_turn_generator", "phase2.agent_turn"
+        node_name = "agent_turn_generator"
+        prompt_name = _prompt_name(settings, "agent_turn")
         inputs = _agent_inputs(state, slot)
     inputs["conversation_so_far"] = _render_history(state.current_dialogue_turns)
     inputs["turn_index"] = len(state.current_dialogue_turns) + 1
+    if settings.tickets.channel == "phone":
+        inputs["disfluency"] = settings.tickets.phone.disfluency
     # On a re-roll, surface the prior consistency issues to the agent so it can
     # avoid repeating them. Only the agent turn receives them (it drives diagnosis).
     prior_issues = (
@@ -283,9 +438,10 @@ async def _generate_turn(
         run_id=state.run_id,
         node_name=node_name,
         artifact_type="resolution",
-        artifact_id=ticket_uid,
+        artifact_id=contact_key,
         role="generator",
         parent_link=link,
+        step=inputs["turn_index"],
     )
     ctx = AgentContext(
         inputs={**inputs, "prior_issues": prior_issues}, retry_attempt=state.retry_attempt
@@ -316,7 +472,9 @@ async def generate_agent_turn_node(
     settings: AppSettings,
 ) -> dict[str, Any]:
     """LLM call: one service-agent turn."""
-    return await _generate_turn(state, factory=factory, db=db, adb=adb, speaker="agent")
+    return await _generate_turn(
+        state, factory=factory, db=db, adb=adb, settings=settings, speaker="agent"
+    )
 
 
 async def generate_customer_turn_node(
@@ -328,7 +486,9 @@ async def generate_customer_turn_node(
     settings: AppSettings,
 ) -> dict[str, Any]:
     """LLM call: one customer turn."""
-    return await _generate_turn(state, factory=factory, db=db, adb=adb, speaker="customer")
+    return await _generate_turn(
+        state, factory=factory, db=db, adb=adb, settings=settings, speaker="customer"
+    )
 
 
 async def validate_conversation_node(
@@ -341,7 +501,8 @@ async def validate_conversation_node(
 ) -> dict[str, Any]:
     """LLM call: consistency review of the full transcript; may return edits."""
     slot = state.plan_slots[state.slot_index]
-    ticket_uid = f"{state.run_id}:{slot.index:06d}"
+    rnd = _current_round(state, slot)
+    contact_key = _contact_key(state, slot, rnd)
     # _converge_node has already assembled the accumulated turns into the draft.
     assert state.current_resolution_draft is not None
     draft = state.current_resolution_draft
@@ -349,6 +510,7 @@ async def validate_conversation_node(
     problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
     inputs: dict[str, Any] = {
         "company_name": state.company.name,
+        "channel": settings.tickets.channel,
         "customer_tone": slot.tone,
         "problem": {
             "title": problem.title,
@@ -358,6 +520,7 @@ async def validate_conversation_node(
             "resolution_hint": problem.resolution_hints.get(slot.ticket_type.value, ""),
         },
         "candidate": draft.model_dump(),
+        **_round_inputs(state, rnd),
     }
 
     link = ParentLink(last_generator_trace_id=state.last_generator_trace_id)
@@ -373,7 +536,7 @@ async def validate_conversation_node(
         run_id=state.run_id,
         node_name="conversation_consistency_check",
         artifact_type="resolution",
-        artifact_id=ticket_uid,
+        artifact_id=contact_key,
         role="checker",
         parent_link=link,
     )
@@ -413,59 +576,157 @@ async def validate_conversation_node(
     }
 
 
+def _timed_turns(
+    state: PipelineState, slot: _PlanSlot, rnd: _RoundSpec, turns: list[DialogueTurnOutput]
+) -> tuple[list[dict[str, Any]], float]:
+    """Attach estimated per-utterance offsets to phone turns; return (turns, duration_s).
+
+    Timing is computed here, after any consistency edits, and never lives on
+    ``DialogueTurnOutput`` so the LLM is not asked to produce it.
+    """
+    rng = derive_rng(state.run_seed, f"{contact_label(slot.index, rnd.sequence)}:timing")
+    timings = estimate_turn_timings([t.content for t in turns], rng)
+    out: list[dict[str, Any]] = []
+    for turn, timing in zip(turns, timings, strict=True):
+        row = {**turn.model_dump(), "start_s": timing.start_s, "end_s": timing.end_s}
+        if timing.hold_s:
+            row["hold_s"] = timing.hold_s
+        out.append(row)
+    return out, max((t.end_s for t in timings), default=0.0)
+
+
+def _dated_emails(
+    state: PipelineState,
+    slot: _PlanSlot,
+    rnd: _RoundSpec,
+    turns: list[DialogueTurnOutput],
+    settings: AppSettings,
+) -> tuple[list[dict[str, Any]], datetime]:
+    """Attach a seeded ``sent_at`` to each email of a thread; return (turns, last sent_at).
+
+    A thread with a later contact planned in the same case is compressed to end
+    before that contact starts.
+    """
+    assert rnd.started_at is not None
+    next_round = slot.rounds[state.round_index + 1] if rnd.sequence < rnd.count else None
+    times = estimate_email_times(
+        [t.speaker for t in turns],
+        started_at=rnd.started_at,
+        calendar=settings.tickets.calendar,
+        rng=derive_rng(state.run_seed, f"{contact_label(slot.index, rnd.sequence)}:timing"),
+        next_contact_at=next_round.started_at if next_round else None,
+    )
+    out = [
+        {**turn.model_dump(), "sent_at": at.isoformat()}
+        for turn, at in zip(turns, times, strict=True)
+    ]
+    return out, times[-1]
+
+
 async def commit_dialogue_node(
     state: PipelineState,
     *,
     db: Database,
     adb: AsyncDatabase,
+    settings: AppSettings,
 ) -> dict[str, Any]:
-    """Persist incoming request + resolution, backfill lineage, reset per-slot state."""
+    """Persist one contact (incoming request + resolution) and advance the loop.
+
+    Lineage is backfilled from the case's first contact, so the gold-tuple join
+    keeps pairing a request with its own resolution; every contact carries the
+    case's ``case_uid``. After a non-final contact the same slot continues with
+    the next round; after the last one the loop moves to the next slot.
+    """
     slot = state.plan_slots[state.slot_index]
+    rnd = _current_round(state, slot)
     ticket_uid = f"{state.run_id}:{slot.index:06d}"
+    contact_key = _contact_key(state, slot, rnd)
     assert state.current_resolution_draft is not None
     draft = state.current_resolution_draft
 
     problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
-    customer_name = f"Customer-{slot.tier}-{slot.index:04d}"
+    customer_name = _customer_name(slot)
+    channel = settings.tickets.channel
+    turns: list[dict[str, Any]] = [t.model_dump() for t in draft.turns]
+    ended_at: datetime | None = None
+    duration_s: float | None = None
+    if channel == "phone":
+        turns, duration_s = _timed_turns(state, slot, rnd, draft.turns)
+        if rnd.started_at is not None:
+            ended_at = rnd.started_at + timedelta(seconds=duration_s)
+    elif rnd.started_at is not None and draft.turns:
+        turns, ended_at = _dated_emails(state, slot, rnd, draft.turns, settings)
+        duration_s = (ended_at - rnd.started_at).total_seconds()
 
     ir_id = await IncomingRequestRepo(db).acreate(
         adb,
         IncomingRequestRecord(
-            request_uid=f"{ticket_uid}:req",
+            request_uid=f"{contact_key}:req",
             run_id=state.run_id,
             problem_id=problem.id,
             ticket_type=slot.ticket_type.value,
             customer_name=customer_name,
             customer_tier=slot.tier,
             customer_tone=slot.tone,
-            channel="email",
+            channel=channel,
             subject=draft.subject,
             body=draft.body,
             quality_flag=state.last_quality_flag,
             created_at=datetime.now(UTC),
+            case_uid=ticket_uid,
+            round_index=rnd.sequence,
         ),
     )
     res_id = await ResolutionRepo(db).acreate(
         adb,
         ResolutionRecord(
-            resolution_uid=f"{ticket_uid}:res",
+            resolution_uid=f"{contact_key}:res",
             run_id=state.run_id,
             incoming_request_id=ir_id,
             problem_id=problem.id,
             ticket_type=slot.ticket_type.value,
-            turns=[t.model_dump() for t in draft.turns],
+            turns=turns,
             turn_count=len(draft.turns),
-            resolved=draft.resolved,
+            # A case only closes on its last contact. The prompts ask for this, but a
+            # speaker can still claim done, and an exhausted-retry commit keeps that
+            # draft, so the rule is enforced here instead of trusted to the model.
+            resolved=draft.resolved and rnd.sequence == rnd.count,
             quality_flag=state.last_quality_flag,
             created_at=datetime.now(UTC),
+            channel=channel,
+            agent_name=_agent_name(slot),
+            end_reason=draft.end_reason,
+            started_at=rnd.started_at,
+            ended_at=ended_at,
+            duration_s=duration_s,
+            case_uid=ticket_uid,
+            round_index=rnd.sequence,
+            round_count=rnd.count,
         ),
     )
-    await LineageRepo(db).aupdate_links(
-        adb, ticket_uid, incoming_request_id=ir_id, resolution_id=res_id
-    )
+    if rnd.sequence == 1:
+        await LineageRepo(db).aupdate_links(
+            adb, ticket_uid, incoming_request_id=ir_id, resolution_id=res_id
+        )
 
+    if rnd.sequence < rnd.count:
+        progress: dict[str, Any] = {
+            "round_index": state.round_index + 1,
+            "case_history": [
+                *state.case_history,
+                _PriorContact(
+                    sequence=rnd.sequence,
+                    started_at=rnd.started_at,
+                    ended_at=ended_at,
+                    end_reason=draft.end_reason,
+                    turns=draft.turns,
+                ),
+            ],
+        }
+    else:
+        progress = {"slot_index": state.slot_index + 1, "round_index": 0, "case_history": []}
     return {
-        "slot_index": state.slot_index + 1,
+        **progress,
         "retry_attempt": 0,
         "current_resolution_draft": None,
         "current_dialogue_turns": [],
@@ -505,7 +766,17 @@ async def _mark_validation_skipped_node(state: PipelineState) -> dict[str, Any]:
 
 
 async def _mark_cap_hit_node(state: PipelineState) -> dict[str, Any]:
-    """Stamp the turn-cap warning and pin the end reason when the cap is reached."""
+    """Stamp the turn-cap warning and pin the end reason when the cap is reached.
+
+    A contact planned to drop hits its own lower cap first; that is the
+    intended ending, so it is recorded as ``dropped`` without a warning.
+    """
+    if state.slot_index < len(state.plan_slots):
+        rnd = _current_round(state, state.plan_slots[state.slot_index])
+        if rnd.drop_after_turns is not None and len(state.current_dialogue_turns) >= min(
+            rnd.drop_after_turns, state.dialogue_turn_cap
+        ):
+            return {"dialogue_end_reason": "dropped"}
     return {
         "dialogue_end_reason": "cap_hit",
         "last_quality_flag": "warning:turn_cap_hit",
@@ -543,7 +814,7 @@ def _route_after_build_allocation_plan(state: PipelineState) -> Literal["generat
 def _route_after_agent_turn(state: PipelineState) -> Literal["customer", "consistency", "cap"]:
     if state.dialogue_done:
         return "consistency"
-    if len(state.current_dialogue_turns) >= state.dialogue_turn_cap:
+    if len(state.current_dialogue_turns) >= _effective_turn_cap(state):
         return "cap"
     return "customer"
 
@@ -551,7 +822,7 @@ def _route_after_agent_turn(state: PipelineState) -> Literal["customer", "consis
 def _route_after_customer_turn(state: PipelineState) -> Literal["agent", "consistency", "cap"]:
     if state.dialogue_done:
         return "consistency"
-    if len(state.current_dialogue_turns) >= state.dialogue_turn_cap:
+    if len(state.current_dialogue_turns) >= _effective_turn_cap(state):
         return "cap"
     return "agent"
 
@@ -572,6 +843,7 @@ def _route_after_validate_conversation(
 
 
 def _route_after_commit_resolution(state: PipelineState) -> Literal["next", "done"]:
+    """``next`` covers both the next contact of the same case and the next slot."""
     return "next" if state.slot_index < len(state.plan_slots) else "done"
 
 
@@ -617,7 +889,7 @@ def build_phase2_subgraph(
         "validate_conversation",
         partial(validate_conversation_node, factory=factory, db=db, adb=adb, settings=settings),
     )
-    g.add_node("commit_dialogue", partial(commit_dialogue_node, db=db, adb=adb))
+    g.add_node("commit_dialogue", partial(commit_dialogue_node, db=db, adb=adb, settings=settings))
     g.add_node("_bump_retry", _bump_retry_node)
     g.add_node("_mark_exhausted", _mark_exhausted_node)
     g.add_node("_mark_validation_skipped", _mark_validation_skipped_node)

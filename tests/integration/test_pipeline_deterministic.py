@@ -31,10 +31,12 @@ from csfd.settings import (
     AgentLLMConfig,
     AppSettings,
     BudgetConfig,
+    Channel,
     DialogueConfig,
     ObservabilityConfig,
     PipelineConfig,
     ProblemDatabaseConfig,
+    RoundsConfig,
     StorageConfig,
     TicketsConfig,
     ValidationConfig,
@@ -93,7 +95,14 @@ def _canned_verdict() -> Verdict:
     )
 
 
-def _build_settings(*, tmp_path: Path, total: int = 10, problems: int = 4) -> AppSettings:
+def _build_settings(
+    *,
+    tmp_path: Path,
+    total: int = 10,
+    problems: int = 4,
+    channel: Channel = "email",
+    rounds: RoundsConfig | None = None,
+) -> AppSettings:
     sqlite_path = tmp_path / "runs.sqlite"
     return AppSettings(
         pipeline=PipelineConfig(version="test", run_seed=7, budget=BudgetConfig()),
@@ -119,6 +128,8 @@ def _build_settings(*, tmp_path: Path, total: int = 10, problems: int = 4) -> Ap
                 "l2": {"neutral": 1.0},
                 "l3": {"neutral": 1.0},
             },
+            channel=channel,
+            rounds=rounds or RoundsConfig(),
         ),
         validation=ValidationConfig(enabled=False, max_retries=0),
         observability=ObservabilityConfig(),
@@ -373,3 +384,142 @@ def test_lineage_links_every_ticket(
             (run_id,),
         ).fetchone()["n"]
     assert unlinked == 0
+
+
+def test_phone_call_metadata_is_deterministic_across_runs(
+    tmp_path: Path, company: CompanyProfile, scenarios: ScenarioCatalogue
+) -> None:
+    """Call start times and scripted greetings are pinned by seed + slot, not by the clock."""
+    import json
+
+    def _run(sub: str) -> list[tuple[str, str, str, str]]:
+        (tmp_path / sub).mkdir()
+        settings = _build_settings(tmp_path=tmp_path / sub, total=6, problems=2, channel="phone")
+        db = Database(path=Path(settings.storage.sqlite_path))
+        apply_migrations(db)
+        run_id = asyncio.run(
+            run_pipeline(
+                settings=settings,
+                factory=_build_fake_factory(tmp_path),
+                db=db,
+                company=company,
+                scenarios=scenarios,
+            )
+        )
+        with db.connect() as conn:
+            rows = conn.execute(
+                "SELECT resolution_uid, channel, started_at, turns_json FROM resolutions "
+                "WHERE run_id = ?",
+                (run_id,),
+            ).fetchall()
+        return sorted(
+            (
+                r["resolution_uid"].split(":", 1)[1],
+                r["channel"],
+                r["started_at"],
+                json.loads(r["turns_json"])[0]["content"],
+            )
+            for r in rows
+        )
+
+    a, b = _run("a"), _run("b")
+    assert a == b
+    assert len(a) == 6
+    assert {row[1] for row in a} == {"phone"}
+    assert len({row[2] for row in a}) == 6
+
+
+def test_multi_contact_plan_is_deterministic_and_counted_per_case(
+    tmp_path: Path, company: CompanyProfile, scenarios: ScenarioCatalogue
+) -> None:
+    """Contacts per case, their order, and their start times are pinned by seed + config."""
+    import json
+
+    from csfd.storage.repository import RunRepo
+
+    rounds = RoundsConfig(proportions={1: 0.5, 2: 0.25, 3: 0.25})
+
+    def _run(sub: str) -> tuple[list[tuple[str, int, int, str]], dict[str, object]]:
+        (tmp_path / sub).mkdir()
+        settings = _build_settings(
+            tmp_path=tmp_path / sub, total=8, problems=2, channel="phone", rounds=rounds
+        )
+        db = Database(path=Path(settings.storage.sqlite_path))
+        apply_migrations(db)
+        run_id = asyncio.run(
+            run_pipeline(
+                settings=settings,
+                factory=_build_fake_factory(tmp_path),
+                db=db,
+                company=company,
+                scenarios=scenarios,
+            )
+        )
+        with db.connect() as conn:
+            rows = conn.execute(
+                "SELECT case_uid, round_index, round_count, started_at FROM resolutions "
+                "WHERE run_id = ?",
+                (run_id,),
+            ).fetchall()
+        stats = json.loads(RunRepo(db).get(run_id).stats_json or "{}")
+        contacts = sorted(
+            (r["case_uid"].split(":", 1)[1], r["round_index"], r["round_count"], r["started_at"])
+            for r in rows
+        )
+        return contacts, stats
+
+    (a, stats), (b, _) = _run("a"), _run("b")
+    assert a == b
+    # 8 cases: 4 x 1 contact, 2 x 2, 2 x 3 -> 14 contacts.
+    assert len(a) == 14
+    assert len({case for case, *_ in a}) == 8
+    for case in {case for case, *_ in a}:
+        seqs = [(i, n, t) for c, i, n, t in a if c == case]
+        assert [i for i, _, _ in seqs] == list(range(1, seqs[0][1] + 1))
+        starts = [t for *_, t in seqs]
+        assert starts == sorted(starts)
+    assert stats["contacts_per_case"] == {"1": 4, "2": 2, "3": 2}
+    assert stats["resolutions_count"] == 14
+    assert stats["channel_counts"] == {"phone": 14}
+    # Case-level breakdowns are not inflated by callbacks.
+    assert sum(stats["type_counts"].values()) == 8  # type: ignore[attr-defined]
+
+
+def test_email_send_times_are_deterministic_across_runs(
+    tmp_path: Path, company: CompanyProfile, scenarios: ScenarioCatalogue
+) -> None:
+    """The default email channel dates every message from seed + slot, not the clock."""
+    import json
+
+    def _run(sub: str) -> list[tuple[str, str, list[str]]]:
+        (tmp_path / sub).mkdir()
+        settings = _build_settings(tmp_path=tmp_path / sub, total=4, problems=2)
+        db = Database(path=Path(settings.storage.sqlite_path))
+        apply_migrations(db)
+        run_id = asyncio.run(
+            run_pipeline(
+                settings=settings,
+                factory=_build_fake_factory(tmp_path),
+                db=db,
+                company=company,
+                scenarios=scenarios,
+            )
+        )
+        with db.connect() as conn:
+            rows = conn.execute(
+                "SELECT resolution_uid, channel, turns_json FROM resolutions WHERE run_id = ?",
+                (run_id,),
+            ).fetchall()
+        return sorted(
+            (
+                r["resolution_uid"].split(":", 1)[1],
+                r["channel"],
+                [t["sent_at"] for t in json.loads(r["turns_json"])],
+            )
+            for r in rows
+        )
+
+    a, b = _run("a"), _run("b")
+    assert a == b
+    assert {row[1] for row in a} == {"email"}
+    assert all(len(sent) == 2 for _, _, sent in a)

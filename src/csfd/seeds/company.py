@@ -21,7 +21,9 @@ class CompanyProfile:
 def parse_company_seed(path: Path) -> CompanyProfile:
     text = path.read_text(encoding="utf-8")
     h1 = _H1.search(text)
-    name = h1.group(1).strip() if h1 else path.stem
+    # The H1 may carry a document-title suffix ("CoolTherm — Company Profile");
+    # the company name is what agents say out loud, so keep only the part before it.
+    name = h1.group(1).split(" — ", 1)[0].strip() if h1 else path.stem
     sections: dict[str, str] = {}
     headings = list(_H2.finditer(text))
     for i, m in enumerate(headings):
