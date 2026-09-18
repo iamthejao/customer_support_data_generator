@@ -1,0 +1,16 @@
+# Route both agent roles through the local `codex` CLI (ChatGPT subscription
+# auth), not an API key. Requires the `codex` binary on $PATH and a
+# logged-in session (run `codex login` once). Every call runs in codex's
+# read-only sandbox with approvals disabled and no session persistence, so
+# codex cannot modify files on disk.
+agents:
+  generator:
+    provider: codex_cli
+    model: gpt-5.6-sol
+    temperature: 0.85
+    timeout_s: 180
+  combined_checker:
+    provider: codex_cli
+    model: gpt-5.5
+    temperature: 0.1
+    timeout_s: 120

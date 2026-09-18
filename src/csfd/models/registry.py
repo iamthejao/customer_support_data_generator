@@ -8,12 +8,20 @@ from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from csfd.models.claude_code_cli import ClaudeCodeCLIModel
+from csfd.models.codex_cli import CodexCLIModel
 from csfd.settings import AgentLLMConfig
 
 
 def build_llm(cfg: AgentLLMConfig) -> BaseChatModel:
     if cfg.provider == "claude_code_cli":
         return ClaudeCodeCLIModel(
+            model=cfg.model,
+            temperature=cfg.temperature,
+            max_tokens=cfg.max_tokens,
+            timeout_s=cfg.timeout_s,
+        )
+    if cfg.provider == "codex_cli":
+        return CodexCLIModel(
             model=cfg.model,
             temperature=cfg.temperature,
             max_tokens=cfg.max_tokens,

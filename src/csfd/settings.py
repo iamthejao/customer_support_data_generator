@@ -30,7 +30,7 @@ class PipelineConfig(BaseModel):
 
 
 class AgentLLMConfig(BaseModel):
-    provider: Literal["anthropic", "openai_compat", "claude_code_cli"]
+    provider: Literal["anthropic", "openai_compat", "claude_code_cli", "codex_cli"]
     model: str
     temperature: float = 0.7
     max_tokens: int | None = None

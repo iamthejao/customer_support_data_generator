@@ -135,7 +135,7 @@ CREATE TABLE IF NOT EXISTS agent_traces (
     output_json         TEXT,
     verdict             TEXT CHECK (verdict IN ('pass', 'fail')),
     verdict_issues_json TEXT,
-    model_provider      TEXT NOT NULL CHECK (model_provider IN ('anthropic', 'openai_compat', 'claude_code_cli', 'fake')),
+    model_provider      TEXT NOT NULL CHECK (model_provider IN ('anthropic', 'openai_compat', 'claude_code_cli', 'codex_cli', 'fake')),
     model_id            TEXT NOT NULL,
     tokens_in           INTEGER,
     tokens_out          INTEGER,
