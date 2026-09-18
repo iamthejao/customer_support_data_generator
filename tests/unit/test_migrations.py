@@ -40,7 +40,8 @@ def test_apply_migrations_is_idempotent(tmp_db_path: Path) -> None:
     assert "runs" in names
 
 
-def test_agent_traces_accepts_claude_code_cli_provider(tmp_db_path: Path) -> None:
+@pytest.mark.parametrize("provider", ["claude_code_cli", "codex_cli"])
+def test_agent_traces_accepts_cli_providers(tmp_db_path: Path, provider: str) -> None:
     from datetime import UTC, datetime
 
     from csfd.storage.repository import AgentTraceRecord, AgentTraceRepo, RunRecord, RunRepo
@@ -78,7 +79,7 @@ def test_agent_traces_accepts_claude_code_cli_provider(tmp_db_path: Path) -> Non
             output_json=None,
             verdict=None,
             verdict_issues_json=None,
-            model_provider="claude_code_cli",
+            model_provider=provider,
             model_id="sonnet-4",
             tokens_in=None,
             tokens_out=None,
@@ -93,7 +94,7 @@ def test_agent_traces_accepts_claude_code_cli_provider(tmp_db_path: Path) -> Non
     )
     with db.connect() as conn:
         row = conn.execute("SELECT model_provider FROM agent_traces WHERE id='t1'").fetchone()
-    assert row["model_provider"] == "claude_code_cli"
+    assert row["model_provider"] == provider
 
 
 def test_problems_table_columns(tmp_db_path: Path) -> None:

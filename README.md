@@ -490,7 +490,7 @@ csfd generate --profile codex-cli --channel phone --problems 1 --tickets 4
 csfd export <run_id> --format transcripts
 ```
 
-This produces one problem and four call-transcript cases (`tickets`) all built from that same problem, under `data/exports/<run_id>/transcripts/`.
+This produces one problem and four call-transcript cases (`tickets`) all built from that same problem, under `data/exports/<run_id>/transcripts/`. Databases created before `codex_cli` was added keep the old `agent_traces.model_provider` constraint (migrations are `CREATE ... IF NOT EXISTS`), so delete or recreate the SQLite file before the first `codex-cli` run.
 
 Embedding-based dedup is enabled in `local-only` and `mixed` (which run against a local Ollama instance). `claude-only`, `claude-cli`, `codex-cli`, and `dev` leave it disabled because Anthropic, the Claude CLI, and the Codex CLI do not expose embedding endpoints.
 
