@@ -79,7 +79,7 @@ uv sync
 cp .env.example .env             # populate ANTHROPIC_API_KEY or LOCAL_BASE_URL
 csfd init                        # scaffolds seeds/, data/, .env.example
 # edit seeds/company_seed.md and seeds/scenarios_seed.md
-csfd db-migrate                  # creates runs.sqlite (applies all migrations)
+csfd db-migrate                  # creates runs.sqlite (idempotent schema create)
 csfd generate --seed 42 --problems 10 --tickets 100
 ```
 
@@ -431,7 +431,7 @@ Embedding-based dedup is enabled in `local-only` and `mixed` (which run against 
 | Command | Purpose |
 |---|---|
 | `csfd init` | scaffold `seeds/`, `data/`, `.env.example` |
-| `csfd db-migrate` | apply SQL migrations to `runs.sqlite` |
+| `csfd db-migrate` | create the `runs.sqlite` schema (idempotent) |
 | `csfd generate --seed N --problems M --tickets T` | run the deterministic LangGraph pipeline |
 | `csfd generate --channel phone [--disfluency none\|light\|moderate]` | generate phone-call transcripts instead of email tickets |
 | `csfd generate --rounds N` | make every case N related contacts (callbacks); mixes go in `tickets.rounds.proportions` |
