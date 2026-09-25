@@ -192,7 +192,11 @@ def test_init_run_node_writes_run_record(tmp_path: Path) -> None:
         "validation",
         "embedding",
         "company",
+        "case_plan",
+        "problems_from",
     }
+    assert run.phase == "full" and run.parent_run_id is None
+    assert snapshot["case_plan"] is None and snapshot["problems_from"] is None
     assert snapshot["company"] == {"name": "X", "seed": "kalvora"}
     assert snapshot["tickets"]["channel"] == "email"
     assert snapshot["tickets"]["rounds"]["proportions"] == {"1": 1.0}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast, get_args
@@ -10,6 +11,7 @@ from typing import cast, get_args
 import typer
 
 from csfd.agents.factory import AgentFactory
+from csfd.case_plan import CasePlan, load_case_plan
 from csfd.models.registry import build_llm
 from csfd.observability.logging import configure_logging
 from csfd.pipeline import run_pipeline
@@ -17,6 +19,7 @@ from csfd.prompts.registry import PromptRegistry
 from csfd.seeds.company import parse_company_seed
 from csfd.seeds.scenarios import parse_scenarios_seed
 from csfd.settings import (
+    AppSettings,
     Channel,
     Disfluency,
     HeaderStyle,
@@ -203,6 +206,20 @@ def generate(
         "--disfluency",
         help="Phone speech style: none | light | moderate. Overrides tickets.phone.disfluency.",
     ),
+    plan: str | None = typer.Option(
+        None,
+        "--plan",
+        help="Case-plan YAML: one entry per case pinning its problem, ticket type, tier, "
+        "tone, contacts, end modes or problem state; the rest comes from the proportions. "
+        "The number of entries sets the number of cases.",
+    ),
+    problems_from: str | None = typer.Option(
+        None,
+        "--problems-from",
+        help="Reuse the committed problems of an earlier run (same database) instead of "
+        "generating new ones: Phase 1 is skipped and the run is stored as phase2 with that "
+        "parent run id. Use it to render the same problems again, e.g. in another channel.",
+    ),
     rounds: int | None = typer.Option(
         None,
         "--rounds",
@@ -244,6 +261,8 @@ def generate(
     factory = _build_factory(profile)
     db = Database(path=Path(settings.storage.sqlite_path))
     _with_current_schema(apply_migrations, db)
+    problem_ids = _reused_problem_ids(db, problems_from, settings) if problems_from else None
+    case_plan = _load_plan(Path(plan), problem_ids, settings) if plan else None
     company_path, scenarios_path = _resolve_seed_paths(
         settings.seeds,
         company_seed,
@@ -256,9 +275,56 @@ def generate(
             db=db,
             company=parse_company_seed(company_path),
             scenarios=parse_scenarios_seed(scenarios_path),
+            case_plan=case_plan,
+            problems_from=problems_from,
         )
     )
     typer.echo(run_id)
+
+
+def _reused_problem_ids(db: Database, run_id: str, settings: AppSettings) -> list[str]:
+    """Problem ids of the run ``--problems-from`` names, after checking it fits this run."""
+    try:
+        run = RunRepo(db).get(run_id)
+    except KeyError as exc:
+        raise typer.BadParameter(
+            f"no run {run_id!r} in {db.path}", param_hint="--problems-from"
+        ) from exc
+    seed = (json.loads(run.config_snapshot_json).get("company") or {}).get("seed")
+    if seed is not None and seed != settings.seeds.company:
+        raise typer.BadParameter(
+            f"run {run_id} was generated for company {seed!r}, not {settings.seeds.company!r}; "
+            f"pass --company {seed}",
+            param_hint="--problems-from",
+        )
+    ids = [p.id for p in ProblemRepo(db).list_for_run(run_id)]
+    if not ids:
+        raise typer.BadParameter(
+            f"run {run_id} has no committed problems", param_hint="--problems-from"
+        )
+    return ids
+
+
+def _load_plan(path: Path, problem_ids: list[str] | None, settings: AppSettings) -> CasePlan:
+    """Read the case plan, check its problem pins, and size the run to it."""
+    try:
+        case_plan = load_case_plan(path)
+        if problem_ids is not None:
+            case_plan.check_problems(problem_ids)
+        else:
+            # Fresh problems get their ids during the run, so only indices can be pinned.
+            placeholder = [f"#{i}" for i in range(settings.problem_database.count)]
+            for entry in case_plan.cases:
+                if isinstance(entry.problem, str):
+                    raise ValueError(
+                        f"case plan pins problem {entry.problem!r} by id; ids only exist for "
+                        "reused problems (--problems-from), so pin an index instead"
+                    )
+                case_plan.problem_id(entry, placeholder)
+    except (OSError, ValueError) as exc:  # pydantic's ValidationError is a ValueError
+        raise typer.BadParameter(str(exc), param_hint="--plan") from exc
+    settings.tickets.total = len(case_plan.cases)
+    return case_plan
 
 
 def _transcript_style(profile: str | None) -> TranscriptStyleConfig:

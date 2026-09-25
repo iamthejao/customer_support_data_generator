@@ -27,6 +27,7 @@ import structlog
 from pydantic import BaseModel, Field
 
 from csfd.agents.factory import AgentFactory
+from csfd.case_plan import CasePlan
 from csfd.diagnosis import DiagnosisPlan
 from csfd.outcomes import (
     Commitment,
@@ -39,6 +40,7 @@ from csfd.seeds.company import CompanyProfile
 from csfd.seeds.scenarios import ScenarioCatalogue
 from csfd.settings import AppSettings
 from csfd.storage.db import Database
+from csfd.storage.repository import ProblemRepo
 from csfd.ticket_types.definitions import CustomerImpact, FaultDomain, ProblemComplexity
 from csfd.utils.rng import largest_remainder
 
@@ -352,8 +354,15 @@ async def run_pipeline(
     db: Database,
     company: CompanyProfile,
     scenarios: ScenarioCatalogue,
+    case_plan: CasePlan | None = None,
+    problems_from: str | None = None,
 ) -> str:
     """Run the full deterministic pipeline; returns the new run_id.
+
+    ``case_plan`` pins dimensions per case (see csfd.case_plan).
+    ``problems_from`` names an earlier run whose committed problems (in the same
+    database) are reused: Phase 1 is skipped and the run is recorded as
+    ``phase='phase2'`` with that ``parent_run_id``.
 
     Builds the LangGraph parent graph (composed of Phase 1 + Phase 2
     subgraphs), opens an async SQLite checkpointer for durable execution, and
@@ -380,6 +389,11 @@ async def run_pipeline(
             scenarios=scenarios,
             validation_enabled=settings.validation.enabled,
             max_retries=settings.validation.max_retries,
+            case_plan=case_plan,
+            parent_run_id=problems_from,
+            problems_committed=(
+                ProblemRepo(db).list_for_run(problems_from) if problems_from else []
+            ),
         )
         await graph.ainvoke(state, config={"configurable": {"thread_id": run_id}})
     _log.info("pipeline.end", run_id=run_id)

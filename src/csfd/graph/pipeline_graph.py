@@ -3,9 +3,11 @@
 Composes two phase subgraphs into a parent graph:
 
     START → init_run → [Phase 1 subgraph] → [Phase 2 subgraph] → finalize_run → END
+                  └──────── (--problems-from) ────────┘
 
 * `init_run`        — create the `runs` row, capture `git_sha` + `started_at`,
-                      seed run-scoped state fields.
+                      seed run-scoped state fields. A run that reuses an earlier
+                      run's problems (``parent_run_id``) goes straight to Phase 2.
 * Phase 1 subgraph  — Problem Database generation with the per-problem
                       generator → checker → retry loop. Defined in
                       ``csfd.graph.phase1_graph``.
@@ -32,6 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from csfd.agents.base import Verdict
 from csfd.agents.factory import AgentFactory
+from csfd.case_plan import CasePlan
 from csfd.diagnosis import ContactBeat
 from csfd.facts import CaseFacts
 from csfd.models.registry import build_llm
@@ -121,6 +124,11 @@ class PipelineState(BaseModel):
     scenarios: ScenarioCatalogue
     validation_enabled: bool
     max_retries: int
+    # An explicit case plan (csfd.case_plan) pinning dimensions per case; None = proportions only.
+    case_plan: CasePlan | None = None
+    # Set when Phase 2 reuses the committed problems of an earlier run
+    # (--problems-from): Phase 1 is skipped and ``problems_committed`` starts filled.
+    parent_run_id: str | None = None
 
     # --- Phase 1 progress ---
     target_complexities: list[str] = Field(default_factory=list)
@@ -176,8 +184,9 @@ async def init_run_node(
         adb,
         RunRecord(
             id=state.run_id,
-            phase="full",
-            parent_run_id=None,
+            # A run that reuses an earlier run's problems generates Phase 2 only.
+            phase="phase2" if state.parent_run_id else "full",
+            parent_run_id=state.parent_run_id,
             status="running",
             started_at=started_at,
             completed_at=None,
@@ -191,6 +200,12 @@ async def init_run_node(
                     "validation": settings.validation.model_dump(mode="json"),
                     "embedding": settings.embedding.model_dump(mode="json"),
                     "company": {"name": state.company.name, "seed": settings.seeds.company},
+                    "case_plan": (
+                        state.case_plan.model_dump(mode="json", exclude_none=True)
+                        if state.case_plan
+                        else None
+                    ),
+                    "problems_from": state.parent_run_id,
                 },
                 ensure_ascii=False,
             ),
@@ -214,6 +229,11 @@ async def finalize_run_node(
         adb, state.run_id, status="completed", completed=True, stats=stats
     )
     return {}
+
+
+def _route_after_init_run(state: PipelineState) -> Literal["generate", "reuse"]:
+    """Skip Phase 1 when the run reuses an earlier run's problems (--problems-from)."""
+    return "reuse" if state.parent_run_id else "generate"
 
 
 # --------------------------------------------------------------------------- #
@@ -265,7 +285,9 @@ def build_pipeline_graph(
     g.add_node("finalize_run", partial(finalize_run_node, db=db, adb=adb_local))
 
     g.add_edge(START, "init_run")
-    g.add_edge("init_run", "phase1")
+    g.add_conditional_edges(
+        "init_run", _route_after_init_run, {"generate": "phase1", "reuse": "phase2"}
+    )
     g.add_edge("phase1", "phase2")
     g.add_edge("phase2", "finalize_run")
     g.add_edge("finalize_run", END)

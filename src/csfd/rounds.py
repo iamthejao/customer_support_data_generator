@@ -65,8 +65,12 @@ def plan_case_rounds(
     seed: int,
     opening_turns: int,
     turn_cap: int,
+    end_modes: Sequence[str] | None = None,
 ) -> list[RoundSpec]:
     """Plan every contact of one case.
+
+    ``end_modes`` pins how contacts 1..N-1 end (``follow_up`` / ``dropped``, from
+    a case plan); otherwise each is drawn from ``rounds.callback_reasons``.
 
     ``opening_turns`` is how many turns the contact opens with before the
     agent's first reply (1 for email, 2 for phone: greeting + caller). A
@@ -91,7 +95,9 @@ def plan_case_rounds(
         if sequence < round_count:
             rng = derive_rng(seed, f"{label}:end")
             reasons: dict[str, float] = {k: w for k, w in rounds.callback_reasons.items() if w > 0}
-            end_mode = "dropped" if weighted_choice(reasons, rng) == "dropped" else "follow_up"
+            drawn = weighted_choice(reasons, rng)
+            pinned = end_modes[sequence - 1] if end_modes is not None else None
+            end_mode = "dropped" if (pinned or drawn) == "dropped" else "follow_up"
             if end_mode == "dropped":
                 extra = rng.randint(*_DROP_AFTER_EXTRA_TURNS)
                 drop_after = max(opening_turns + 1, min(opening_turns + extra, turn_cap - 1))

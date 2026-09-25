@@ -72,6 +72,7 @@ Subgraph topology:
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any, Literal
@@ -89,6 +90,7 @@ from csfd.calls import (
     estimate_turn_timings,
     scripted_greeting,
 )
+from csfd.case_plan import CasePlanEntry
 from csfd.diagnosis import DiagnosisPlan, agent_guide, customer_findings, plan_beats
 from csfd.facts import (
     CaseFacts,
@@ -374,10 +376,15 @@ async def build_allocation_plan_node(
     adb: AsyncDatabase,
     settings: AppSettings,
 ) -> dict[str, Any]:
-    """Build the deterministic allocation plan and pre-record lineage rows."""
+    """Build the deterministic allocation plan and pre-record lineage rows.
+
+    With a case plan (see csfd.case_plan), the proportional plan is built for
+    as many cases as it lists, then each entry's pinned dimensions override it.
+    """
     tickets_cfg = settings.tickets
+    case_plan = state.case_plan
     plan = build_allocation_plan(
-        total=tickets_cfg.total,
+        total=len(case_plan.cases) if case_plan else tickets_cfg.total,
         type_proportions=tickets_cfg.type_proportions,
         tier_proportions=tickets_cfg.tier_proportions,
         tone_proportions_per_type=tickets_cfg.tone_proportions_per_type,
@@ -391,6 +398,21 @@ async def build_allocation_plan_node(
 
     seed = settings.pipeline.run_seed or 0
     problems_by_id = {p.id: p for p in state.problems_committed}
+    slots = list(plan.slots)
+    pins: dict[int, CasePlanEntry] = {}
+    if case_plan is not None:
+        problem_ids = [p.id for p in state.problems_committed]
+        pins = {slot.index: entry for slot, entry in zip(slots, case_plan.cases, strict=True)}
+        slots = [
+            dataclasses.replace(
+                slot,
+                problem_id=case_plan.problem_id(pins[slot.index], problem_ids) or slot.problem_id,
+                ticket_type=pins[slot.index].ticket_type or slot.ticket_type,
+                tier=pins[slot.index].tier or slot.tier,
+                tone=pins[slot.index].tone or slot.tone,
+            )
+            for slot in slots
+        ]
     facts: dict[int, CaseFacts] = {
         s.index: draw_case_facts(
             state.company.case_facts,
@@ -398,19 +420,24 @@ async def build_allocation_plan_node(
             slot_index=s.index,
             problem_text=_problem_text(problems_by_id[s.problem_id]),
         )
-        for s in plan.slots
+        for s in slots
     }
     states = plan_problem_states(
-        [s.index for s in plan.slots],
-        {s.index: problems_by_id[s.problem_id].viable_outcomes for s in plan.slots},
+        [s.index for s in slots],
+        {s.index: problems_by_id[s.problem_id].viable_outcomes for s in slots},
         {str(k): w for k, w in tickets_cfg.outcome_proportions.items()},
         seed=seed,
     )
     round_counts = assign_round_counts(
-        [s.index for s in plan.slots], tickets_cfg.rounds.proportions, seed=seed
+        [s.index for s in slots], tickets_cfg.rounds.proportions, seed=seed
     )
+    for index, entry in pins.items():
+        if entry.contacts is not None:
+            round_counts[index] = entry.contacts
+        if entry.problem_state is not None:
+            states[index] = entry.problem_state
     pydantic_slots: list[_PlanSlot] = []
-    for s in plan.slots:
+    for s in slots:
         specs = plan_case_rounds(
             slot_index=s.index,
             round_count=round_counts[s.index],
@@ -419,6 +446,7 @@ async def build_allocation_plan_node(
             seed=seed,
             opening_turns=2 if tickets_cfg.channel == "phone" else 1,
             turn_cap=tickets_cfg.dialogue.turn_cap,
+            end_modes=pins[s.index].end_modes if s.index in pins else None,
         )
         beats = plan_beats(
             _diagnosis_plan(problems_by_id[s.problem_id]),
