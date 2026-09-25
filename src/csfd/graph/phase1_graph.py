@@ -99,6 +99,11 @@ async def generate_problem_node(
     inputs: dict[str, Any] = {
         "company_name": state.company.name,
         "company_overview": state.company.raw_markdown[:2000],
+        # The seed's case-facts catalogue sits past the overview cut, so pass it whole.
+        "products": [
+            {"model": a.model, "description": a.description}
+            for a in state.company.case_facts.assets
+        ],
         "scenarios": [dataclasses.asdict(s) for s in state.scenarios.scenarios[:8]],
         "target_complexity": target_complexity,
         "prior_titles": [p.title for p in state.problems_committed[-10:]],

@@ -31,20 +31,28 @@ Together, these datasets support both online-style evaluation, where only `incom
 
 Each run is driven by two kinds of inputs: **seed files** that describe the fictional domain, and **config files** that pin down how much data to make, in what proportions, and with which models. Together they fully determine a run — same seeds + same config + same `run_seed` reproduce the same allocation plan.
 
-### Seed files (`seeds/`)
+### Seed files (`seeds/<company>/`)
 
-Markdown documents that ground generation in a concrete business. They are referenced from the generator prompts and are the only source of domain-specific content; swap them out to retarget the generator at a different company or industry without touching code.
+Markdown documents that ground generation in a concrete business. They are referenced from the generator prompts and are the only source of domain-specific content; add a folder to retarget the generator at a different company or industry without touching code. Each company is one folder under `seeds/`, selected with `seeds.company` in YAML or `--company` on `csfd generate` (`--company-seed` / `--scenarios-seed` still take explicit file paths):
 
-- **`seeds/company_seed.md`** — the company profile. Identity, sector, products (e.g. the flagship CT-500 chiller), representative components, customer segments, and service organisation. This is what makes generated problems and resolutions sound like they belong to a real manufacturer rather than a generic SaaS. Its structured `## Case facts` section (an `### Assets` table of `Model | Description | Serial format`, plus `### Caller roles` and `### Site locales` bullet lists) is what each case's facts are drawn from — see [Case facts](#case-facts). Serial formats use `#` for a digit and `?` for an upper-case letter. A seed without the section still works, but its cases get no machine or caller role.
-- **`seeds/scenarios_seed.md`** — the customer-service case catalogue. A structured list of business cases (documentation requests, L1/L2/L3 troubleshooting, field-service escalations) with tags, escalation tier, as-is process, sample-data hints, and systems touched. The generator uses these as the templates that Phase 1 problems and Phase 2 resolutions are built against.
+- **`seeds/<company>/company_seed.md`** — the company profile. Identity, sector, products, what typically goes wrong, customer segments, and service organisation. This is what makes generated problems and resolutions sound like they belong to a real manufacturer rather than a generic SaaS. Its structured `## Case facts` section (an `### Assets` table of `Model | Description | Serial format`, plus `### Caller roles` and `### Site locales` bullet lists) is what each case's facts are drawn from — see [Case facts](#case-facts). Serial formats use `#` for a digit and `?` for an upper-case letter. Model names are shaped like `CF-600` (letters, a separator, at least three digits) so the identifier check can recognise the family and catch invented variants. A seed without the section still works, but its cases get no machine or caller role. Phase 1 also receives the asset table as the product catalogue.
+- **`seeds/<company>/scenarios_seed.md`** — the customer-service scenario catalogue. One `## Category — Title` section per scenario (documentation requests, known troubleshooting patterns, L2 remote diagnosis, field-service escalations) with the tier, the customer's opening request, the agent's first move, what goes wrong today, and sample-data hints. Phase 1 builds its problems against these.
 
-`csfd init` scaffolds both files; the shipped versions describe the fictional **CoolTherm Industrial Chillers** company used as the running example.
+Two fictional companies ship, both invented (no real company, product or trademark names):
+
+| `--company` | Company | Domain | Machines in the case-facts catalogue |
+|---|---|---|---|
+| `kalvora` (default) | **Kalvora Dental** | Dental laboratory and practice equipment plus restorative materials | CF-600 firing furnace, CP-800 press furnace, SX-1500 sintering furnace, MV-450 / MV-650 milling units, LQ-220 curing light |
+| `norrholt` | **Norrholt Glass Machinery** | Glass-container (bottle and jar) forming | FX-608 / FX-612 IS forming machines, GF-350 gob feeder, TC-400 forming controls, VQ-220 ware inspection |
+
+`csfd init` scaffolds a stub company at `seeds/my_company/` (use it with `--company my_company`). The seed slug is recorded in `runs.config_snapshot_json` under `company.seed`.
 
 ### Config files (`config/`)
 
 YAML that controls the deterministic shape of the run — counts, proportions, retry budget, model choice, and validation toggles.
 
 - **`config/default.yaml`** — the base config, always loaded. Top-level sections:
+  - `seeds` — `dir` and `company`: which `seeds/<company>/` folder the run uses (CLI: `--seeds-dir`, `--company`).
   - `pipeline` — `version`, `run_seed`, and the per-run budget (`max_tokens_per_run`, `max_usd_per_run`, `max_retries_per_artifact`).
   - `agents` — the two LLM buckets (`generator` and `combined_checker`) with `provider`, `model`, `temperature`, `max_tokens`, and `timeout_s`. Every node in the graph routes to one of these buckets.
   - `problem_database` — Phase 1 controls: `count` and `complexity_proportions` (simple / medium / complex), applied with largest-remainder rounding.
@@ -77,10 +85,11 @@ Three output datasets per run: **`incoming_requests`** (denormalized customer re
 ```bash
 uv sync
 cp .env.example .env             # populate ANTHROPIC_API_KEY or LOCAL_BASE_URL
-csfd init                        # scaffolds seeds/, data/, .env.example
-# edit seeds/company_seed.md and seeds/scenarios_seed.md
+csfd init                        # scaffolds seeds/my_company/, data/, .env.example
+# use a shipped company (--company kalvora | norrholt) or edit seeds/my_company/*.md
 csfd db-migrate                  # creates runs.sqlite (idempotent schema create)
-csfd generate --seed 42 --problems 10 --tickets 100
+csfd generate --seed 42 --problems 10 --tickets 100                     # default company: kalvora
+csfd generate --company norrholt --seed 42 --problems 10 --tickets 100  # the glass-machinery seed
 ```
 
 The proportions, turn counts, and assignment strategy live in `config/default.yaml` under the `problem_database`, `tickets`, and `validation` sections. Use `--profile dev` for a small smoke run (`problem_database.count=3`, `tickets.total=6`).
@@ -108,7 +117,7 @@ The only thing that changes between formats is the `--channel` (and, for phone, 
 ```bash
 uv sync
 cp .env.example .env             # then fill in ANTHROPIC_API_KEY or LOCAL_BASE_URL
-csfd init                        # scaffolds seeds/company_seed.md, seeds/scenarios_seed.md, data/, .env.example
+csfd init                        # scaffolds seeds/my_company/{company,scenarios}_seed.md, data/, .env.example
 csfd db-migrate                  # creates data/runs.sqlite if missing (idempotent — safe to re-run)
 ```
 
@@ -286,7 +295,7 @@ A run uses one format; a mixed email and phone run is not supported yet. The dia
 
 - **Messages.** The customer's opening email carries the subject. Customer and agent then exchange written replies. For single-contact cases the email prompts render exactly as before this format existed.
 - **Dates.** At commit, `csfd.calls.estimate_email_times` gives each message a seeded `sent_at` in `turns_json`: support replies after 5 minutes to 4 hours, customers after 3 minutes to 8 hours, both moved into business hours. `ended_at` is the last message's time. When another contact of the same case is planned, the thread is compressed to finish well before it starts. The compression is measured in working minutes, so every message stays inside business hours; the trade-off is that a heavily compressed thread finishes closer to the next contact than the drawn delays would have.
-- **Rendering.** Each message is written with `From` / `To` / `Date` / `Subject` headers (`Re:` on replies), then the body, then a light one-line quote of the message it answers. Addresses use reserved `.example` domains. The support desk is named after the company in `seeds/company_seed.md`, which is recorded in `runs.config_snapshot_json`.
+- **Rendering.** Each message is written with `From` / `To` / `Date` / `Subject` headers (`Re:` on replies), then the body, then a light one-line quote of the message it answers. Addresses use reserved `.example` domains. The support desk is named after the company in the run's company seed, which is recorded in `runs.config_snapshot_json`.
 
 ### Transcript export
 

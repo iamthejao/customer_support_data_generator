@@ -6,6 +6,12 @@ pipeline:
     max_usd_per_run: 10.0
     max_retries_per_artifact: 2
 
+# Company seed (CLI: --company): seeds/<company>/company_seed.md + scenarios_seed.md.
+# Shipped: kalvora (dental equipment and materials), norrholt (glass-container forming).
+seeds:
+  dir: seeds
+  company: kalvora
+
 # Two agent buckets drive every LLM call in the pipeline:
 #   - generator         : problem brainstorm + resolution generator
 #   - combined_checker  : phase 1 + phase 2 quality checkers

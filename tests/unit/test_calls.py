@@ -44,12 +44,12 @@ def test_calendar_rejects_inverted_business_hours() -> None:
 def test_scripted_greeting_names_company_and_agent() -> None:
     at = datetime(2026, 1, 5, 9, 30, tzinfo=UTC)
     greetings = {
-        scripted_greeting(company="CoolTherm", agent="Agent-l1-0001", at=at, rng=derive_rng(1, s))
+        scripted_greeting(company="Kalvora", agent="Agent-l1-0001", at=at, rng=derive_rng(1, s))
         for s in map(str, range(40))
     }
     assert len(greetings) > 1
     for g in greetings:
-        assert "CoolTherm" in g
+        assert "Kalvora" in g
         assert "Agent-l1-0001" in g
         assert "{" not in g
         assert "afternoon" not in g

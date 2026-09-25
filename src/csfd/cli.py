@@ -20,6 +20,7 @@ from csfd.settings import (
     Channel,
     Disfluency,
     HeaderStyle,
+    SeedsConfig,
     SpeakerStyle,
     TranscriptStyleConfig,
     load_settings,
@@ -87,22 +88,29 @@ ticket-type expectations.
 """
 
 
+_INIT_COMPANY = "my_company"
+
+
 @app.command()
 def init() -> None:
-    """Scaffold seeds/, data/, and an .env.example template in the current dir."""
-    Path("seeds").mkdir(exist_ok=True)
+    """Scaffold seeds/<company>/, data/, and an .env.example template in the current dir."""
+    company_dir = Path("seeds") / _INIT_COMPANY
+    company_dir.mkdir(parents=True, exist_ok=True)
     Path("data").mkdir(exist_ok=True)
     Path("data/exports").mkdir(exist_ok=True)
-    company = Path("seeds/company_seed.md")
+    company = company_dir / "company_seed.md"
     if not company.exists():
         company.write_text(_COMPANY_SEED_STUB, encoding="utf-8")
-    scenarios = Path("seeds/scenarios_seed.md")
+    scenarios = company_dir / "scenarios_seed.md"
     if not scenarios.exists():
         scenarios.write_text(_SCENARIOS_SEED_STUB, encoding="utf-8")
     env = Path(".env.example")
     if not env.exists():
         env.write_text(_DEFAULT_ENV, encoding="utf-8")
-    typer.echo("Initialized seeds/, data/, .env.example.")
+    typer.echo(
+        f"Initialized {company_dir}/, data/, .env.example. "
+        f"Select the seed with --company {_INIT_COMPANY} (or seeds.company in YAML)."
+    )
 
 
 def _with_current_schema(step: Callable[[Database], None], db: Database) -> None:
@@ -142,12 +150,20 @@ def _build_factory(profile: str | None) -> AgentFactory:
 
 
 def _resolve_seed_paths(
-    seeds_dir: str,
+    seeds: SeedsConfig,
     company_seed: str | None,
     scenarios_seed: str | None,
 ) -> tuple[Path, Path]:
-    company = Path(company_seed) if company_seed else Path(seeds_dir) / "company_seed.md"
-    scenarios = Path(scenarios_seed) if scenarios_seed else Path(seeds_dir) / "scenarios_seed.md"
+    """Seed files of the configured company; explicit file paths win."""
+    company = Path(company_seed) if company_seed else seeds.company_path()
+    scenarios = Path(scenarios_seed) if scenarios_seed else seeds.scenarios_path()
+    for path, flag in ((company, "--company-seed"), (scenarios, "--scenarios-seed")):
+        if not path.exists():
+            raise typer.BadParameter(
+                f"seed file not found: {path}. Pick a company under {seeds.dir}/ with "
+                f"--company, or pass the file with {flag}.",
+                param_hint=flag,
+            )
     return company, scenarios
 
 
@@ -165,7 +181,15 @@ def generate(
     seed: int | None = typer.Option(None, "--seed"),
     problems: int | None = typer.Option(None, "--problems"),
     tickets: int | None = typer.Option(None, "--tickets"),
-    seeds_dir: str = typer.Option("seeds", "--seeds-dir"),
+    company: str | None = typer.Option(
+        None,
+        "--company",
+        help="Company seed: the folder under --seeds-dir holding company_seed.md and "
+        "scenarios_seed.md (shipped: kalvora, norrholt). Overrides seeds.company.",
+    ),
+    seeds_dir: str | None = typer.Option(
+        None, "--seeds-dir", help="Folder of company seeds. Overrides seeds.dir."
+    ),
     company_seed: str | None = typer.Option(None, "--company-seed"),
     scenarios_seed: str | None = typer.Option(None, "--scenarios-seed"),
     channel: str | None = typer.Option(
@@ -213,23 +237,25 @@ def generate(
         settings.tickets.phone.disfluency = disfluency_choice
     if rounds is not None:
         settings.tickets.rounds.proportions = {rounds: 1.0}
+    if company is not None:
+        settings.seeds.company = company
+    if seeds_dir is not None:
+        settings.seeds.dir = seeds_dir
     factory = _build_factory(profile)
     db = Database(path=Path(settings.storage.sqlite_path))
     _with_current_schema(apply_migrations, db)
     company_path, scenarios_path = _resolve_seed_paths(
-        seeds_dir,
+        settings.seeds,
         company_seed,
         scenarios_seed,
     )
-    company = parse_company_seed(company_path)
-    scenarios = parse_scenarios_seed(scenarios_path)
     run_id = asyncio.run(
         run_pipeline(
             settings=settings,
             factory=factory,
             db=db,
-            company=company,
-            scenarios=scenarios,
+            company=parse_company_seed(company_path),
+            scenarios=parse_scenarios_seed(scenarios_path),
         )
     )
     typer.echo(run_id)

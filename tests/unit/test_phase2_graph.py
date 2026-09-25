@@ -53,7 +53,7 @@ def _company() -> CompanyProfile:
 
 
 def _scenarios() -> ScenarioCatalogue:
-    return ScenarioCatalogue(scenarios=[], source_path=Path("seeds/scenarios_seed.md"))
+    return ScenarioCatalogue(scenarios=[], source_path=Path("seeds/kalvora/scenarios_seed.md"))
 
 
 def _make_state(**overrides: Any) -> PipelineState:

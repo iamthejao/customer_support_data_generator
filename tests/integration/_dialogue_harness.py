@@ -133,7 +133,7 @@ def initial_state(settings: AppSettings, company: CompanyProfile | None = None) 
         company=company or CompanyProfile(name="Acme", raw_markdown="# Acme", sections={}),
         scenarios=ScenarioCatalogue(
             scenarios=[Scenario(category="cooling", title="x", summary="x")],
-            source_path=Path("seeds/scenarios_seed.md"),
+            source_path=Path("seeds/kalvora/scenarios_seed.md"),
         ),
         validation_enabled=settings.validation.enabled,
         max_retries=settings.validation.max_retries,

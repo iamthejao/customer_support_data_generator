@@ -208,8 +208,22 @@ class EnvSecrets(BaseSettings):
     langsmith_project: str | None = None
 
 
+class SeedsConfig(BaseModel):
+    """Which company seed a run uses: ``<dir>/<company>/{company,scenarios}_seed.md``."""
+
+    dir: str = "seeds"
+    company: str = "kalvora"
+
+    def company_path(self) -> Path:
+        return Path(self.dir) / self.company / "company_seed.md"
+
+    def scenarios_path(self) -> Path:
+        return Path(self.dir) / self.company / "scenarios_seed.md"
+
+
 class AppSettings(BaseModel):
     pipeline: PipelineConfig
+    seeds: SeedsConfig = Field(default_factory=SeedsConfig)
     agents: dict[str, AgentLLMConfig]
     problem_database: ProblemDatabaseConfig
     tickets: TicketsConfig

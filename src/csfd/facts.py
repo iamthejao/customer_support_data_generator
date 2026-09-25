@@ -24,7 +24,7 @@ from csfd.utils.rng import derive_rng
 
 DEFAULT_SITE_LOCALE = "en_US"
 
-# A model identifier shaped like "CT-500": letters, optional separator, digits.
+# A model identifier shaped like "CF-600": letters, optional separator, digits.
 _MODEL_FAMILY = re.compile(r"([A-Za-z]+)[-\s]?(\d+)[A-Za-z]*")
 
 
@@ -43,8 +43,8 @@ class CaseFacts(BaseModel):
 def _named_asset(catalogue: CaseFactsCatalogue, problem_text: str) -> AssetModel | None:
     """The first catalogue model the problem record names, if any.
 
-    Uses the same matching as :func:`identifier_mismatches`, so "CT500" or
-    "CT 500" in the problem picks the CT-500 the check will then expect.
+    Uses the same matching as :func:`identifier_mismatches`, so "CF600" or
+    "CF 600" in the problem picks the CF-600 the check will then expect.
     """
     by_name = {_normalise(a.model): a for a in catalogue.assets}
     mentions = [m for p in _model_patterns(catalogue) for m in p.finditer(problem_text)]
@@ -126,12 +126,12 @@ def _serial_pattern(serial_format: str) -> re.Pattern[str]:
 
 
 def _model_patterns(catalogue: CaseFactsCatalogue) -> list[re.Pattern[str]]:
-    """One pattern per model family ("CT" + digits) plus the literal non-family names.
+    """One pattern per model family ("CF" + digits) plus the literal non-family names.
 
     A family token needs at least as many digits as the family's shortest
-    catalogue model, so component tags such as "CT1" or "CT 15" are not read
-    as machines. Trailing letters count only when upper-case, so "CT-500s"
-    reads as the CT-500 while an invented "CT-4400X" is caught whole.
+    catalogue model, so component tags such as "CF1" or "CF 15" are not read
+    as machines. Trailing letters count only when upper-case, so "CF-600s"
+    reads as the CF-600 while an invented "CF-6600X" is caught whole.
     """
     min_digits: dict[str, int] = {}
     patterns: list[re.Pattern[str]] = []

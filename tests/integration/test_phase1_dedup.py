@@ -167,7 +167,7 @@ def company() -> CompanyProfile:
 def scenarios() -> ScenarioCatalogue:
     return ScenarioCatalogue(
         scenarios=[Scenario(category="auth", title="x", summary="x")],
-        source_path=Path("seeds/scenarios_seed.md"),
+        source_path=Path("seeds/kalvora/scenarios_seed.md"),
     )
 
 

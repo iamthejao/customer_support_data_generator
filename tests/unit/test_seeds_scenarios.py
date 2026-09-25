@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from csfd.seeds.scenarios import ScenarioCatalogue, parse_scenarios_seed
 
 
@@ -16,3 +18,10 @@ def test_scenario_has_summary() -> None:
     assert s.category == "Billing"
     assert "overage" in s.title.lower()
     assert s.summary
+
+
+@pytest.mark.parametrize("company", ["kalvora", "norrholt"])
+def test_shipped_scenario_catalogues_have_categorised_scenarios(company: str) -> None:
+    cat = parse_scenarios_seed(Path("seeds") / company / "scenarios_seed.md")
+    assert len(cat.scenarios) >= 5
+    assert all(s.category != s.title and s.summary for s in cat.scenarios)

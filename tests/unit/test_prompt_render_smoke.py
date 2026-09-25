@@ -29,9 +29,9 @@ def registry() -> PromptRegistry:
 
 def _base_problem_inputs(**overrides: object) -> dict[str, object]:
     base: dict[str, object] = {
-        "company_name": "CoolTherm",
+        "company_name": "Kalvora",
         "target_complexity": "medium",
-        "company_profile": "Industrial chiller manufacturer.",
+        "company_profile": "Dental equipment manufacturer.",
         "scenarios": "Standard CS scenarios.",
     }
     base.update(overrides)
@@ -93,7 +93,7 @@ def test_incoming_request_renders_symptoms_only(registry: PromptRegistry) -> Non
     handle = registry.get("phase2.incoming_request")
     rendered = handle.template.render(
         inputs={
-            "company_name": "CoolTherm",
+            "company_name": "Kalvora",
             "customer_name": "Alice",
             "customer_tier": "standard",
             "customer_tone": "neutral",
@@ -110,7 +110,7 @@ def test_customer_turn_renders_history(registry: PromptRegistry) -> None:
     handle = registry.get("phase2.customer_turn")
     rendered = handle.template.render(
         inputs={
-            "company_name": "CoolTherm",
+            "company_name": "Kalvora",
             "customer_tone": "frustrated",
             "symptoms": ["fan rattles"],
             "customer_impact": "degraded",
@@ -126,7 +126,7 @@ def test_agent_turn_renders_root_cause(registry: PromptRegistry) -> None:
     handle = registry.get("phase2.agent_turn")
     rendered = handle.template.render(
         inputs={
-            "company_name": "CoolTherm",
+            "company_name": "Kalvora",
             "agent_name": "Bob",
             "ticket_type": "l2",
             "problem": {
@@ -151,7 +151,7 @@ def test_agent_turn_renders_prior_issues_on_retry(registry: PromptRegistry) -> N
     handle = registry.get("phase2.agent_turn")
     rendered = handle.template.render(
         inputs={
-            "company_name": "CoolTherm",
+            "company_name": "Kalvora",
             "agent_name": "Bob",
             "ticket_type": "l1",
             "problem": {
@@ -178,7 +178,7 @@ def test_consistency_check_renders_complexity(registry: PromptRegistry) -> None:
     handle = registry.get("phase2.conversation_consistency_check")
     rendered = handle.template.render(
         inputs={
-            "company_name": "CoolTherm",
+            "company_name": "Kalvora",
             "customer_tone": "neutral",
             "problem": {
                 "title": "T",
@@ -205,8 +205,8 @@ def test_consistency_check_renders_complexity(registry: PromptRegistry) -> None:
 
 def _phone_customer_inputs(disfluency: str) -> dict[str, object]:
     return {
-        "company_name": "CoolTherm",
-        "agent_greeting": "Thank you for calling CoolTherm support, this is Agent-l1-0001.",
+        "company_name": "Kalvora",
+        "agent_greeting": "Thank you for calling Kalvora support, this is Agent-l1-0001.",
         "customer_name": "Customer-standard-0001",
         "customer_tier": "standard",
         "customer_tone": "frustrated",
@@ -242,7 +242,7 @@ def test_phone_incoming_request_shows_greeting(registry: PromptRegistry) -> None
     rendered = registry.get("phase2.phone_incoming_request").template.render(
         inputs=_phone_customer_inputs("light")
     )
-    assert "AGENT: Thank you for calling CoolTherm support, this is Agent-l1-0001." in rendered
+    assert "AGENT: Thank you for calling Kalvora support, this is Agent-l1-0001." in rendered
 
 
 def test_phone_customer_turn_renders_uppercase_speakers(registry: PromptRegistry) -> None:
@@ -254,7 +254,7 @@ def test_phone_customer_turn_renders_uppercase_speakers(registry: PromptRegistry
 
 def _phone_agent_inputs(disfluency: str) -> dict[str, object]:
     return {
-        "company_name": "CoolTherm",
+        "company_name": "Kalvora",
         "agent_name": "Agent-l2-0004",
         "ticket_type": "l2",
         "problem": {
@@ -307,7 +307,7 @@ _ENDED_LABELS = ("dropped", "cap_hit", "frustrated", "follow_up", "unresolved")
 
 def _email_customer_inputs() -> dict[str, object]:
     return {
-        "company_name": "CoolTherm",
+        "company_name": "Kalvora",
         "customer_name": "Customer-standard-0001",
         "customer_tier": "standard",
         "customer_tone": "neutral",
@@ -323,7 +323,7 @@ def _email_customer_inputs() -> dict[str, object]:
 
 def _email_agent_inputs() -> dict[str, object]:
     return {
-        "company_name": "CoolTherm",
+        "company_name": "Kalvora",
         "agent_name": "Agent-l2-0004",
         "ticket_type": "l2",
         "problem": {
@@ -344,7 +344,7 @@ def _email_agent_inputs() -> dict[str, object]:
 
 def _checker_inputs() -> dict[str, object]:
     return {
-        "company_name": "CoolTherm",
+        "company_name": "Kalvora",
         "customer_tone": "neutral",
         "problem": {"symptoms": [], "root_cause": []},
         "candidate": {"subject": "s", "body": "b", "end_reason": "agent_done", "turns": []},
@@ -410,16 +410,16 @@ _CUSTOMER_FACTS = {
     "role": "maintenance technician",
     "company": "Wells-Byrne",
     "site": "North Paulaville, United Kingdom",
-    "asset_model": "CT-500",
-    "asset_serial": "CT500-0862-YR",
+    "asset_model": "CF-600",
+    "asset_serial": "CF600-0862-YR",
 }
 _CRM_FACTS = {
     "account": "Wells-Byrne",
     "site": "North Paulaville, United Kingdom",
     "contact_role": "maintenance technician",
-    "asset_model": "CT-500",
-    "asset_description": "Mid-size chiller",
-    "asset_serial": "CT500-0862-YR",
+    "asset_model": "CF-600",
+    "asset_description": "Ceramic firing furnace",
+    "asset_serial": "CF600-0862-YR",
 }
 _CUSTOMER_PROMPTS = [
     "phase2.incoming_request",
@@ -437,7 +437,7 @@ def test_customer_prompts_show_the_case_facts(registry: PromptRegistry, prompt: 
         inputs={**base, "facts": _CUSTOMER_FACTS, "fact_issues": ["named the CT-4400X"]}
     )
     assert "You are the maintenance technician at Wells-Byrne" in rendered
-    assert "CT-500, serial number CT500-0862-YR" in rendered
+    assert "CF-600, serial number CF600-0862-YR" in rendered
     assert "named the CT-4400X" in rendered
     assert "you may make up" not in rendered
     # Without facts (a hand-built slot) the prompt renders as before.
@@ -450,7 +450,10 @@ def test_agent_prompts_show_the_crm_record(registry: PromptRegistry, prompt: str
     base = _phone_agent_inputs("light")
     rendered = template.render(inputs={**base, "facts": _CRM_FACTS})
     assert "Account: Wells-Byrne (North Paulaville, United Kingdom)" in rendered
-    assert "Installed machine: CT-500 (Mid-size chiller), serial number CT500-0862-YR" in rendered
+    assert (
+        "Installed machine: CF-600 (Ceramic firing furnace), serial number CF600-0862-YR"
+        in rendered
+    )
     assert "CRM record" not in template.render(inputs=base)
 
 
@@ -467,8 +470,8 @@ def test_consistency_check_sees_background_and_case_record(registry: PromptRegis
                 "resolution_hint": "h",
             },
             "facts": {
-                "asset_model": "CT-500",
-                "asset_serial": "CT500-0862-YR",
+                "asset_model": "CF-600",
+                "asset_serial": "CF600-0862-YR",
                 "customer_company": "Wells-Byrne",
                 "site_city": "North Paulaville",
                 "site_country": "United Kingdom",
@@ -478,6 +481,6 @@ def test_consistency_check_sees_background_and_case_record(registry: PromptRegis
         }
     )
     assert "Relocated six months ago." in rendered
-    assert "Machine: CT-500, serial number CT500-0862-YR" in rendered
+    assert "Machine: CF-600, serial number CF600-0862-YR" in rendered
     assert "plant engineer at Wells-Byrne, North Paulaville, United Kingdom" in rendered
     assert "(l) Identifiers, dates and history" in rendered
