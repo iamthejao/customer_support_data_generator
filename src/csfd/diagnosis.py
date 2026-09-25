@@ -83,7 +83,8 @@ def plan_beats(
     Checks run up to the confirming one; states that stop short of it
     (``pending_customer_test``, ``escalated_open``, ``abandoned``) leave the
     confirming check undone. The checks are spread evenly across contacts,
-    earlier contacts taking the remainder. A ``follow_up`` contact agrees the
+    later contacts taking the remainder, so the final contact always has one
+    when there is any. A ``follow_up`` contact agrees the
     next unrun check as the customer's test and leaves the case
     ``pending_customer_test``; a dropped contact leaves no state.
     """
@@ -98,7 +99,7 @@ def plan_beats(
     beats: list[ContactBeat] = []
     start = 0
     for position, end_mode in enumerate(end_modes):
-        size = base + (1 if position < extra else 0)
+        size = base + (1 if position >= count - extra else 0)
         checks = runnable[start : start + size]
         start += size
         final = position == count - 1

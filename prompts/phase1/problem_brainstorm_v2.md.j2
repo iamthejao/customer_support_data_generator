@@ -29,7 +29,7 @@ Produce one Problem with the following sections. The schema requires every field
 ### Problem description (customer-facing layer)
 - `title`: imperative, 4–10 words, names the failing behaviour (not the fix).
 - `summary`: 1–2 sentences, customer-facing voice, no internal jargon.
-- `background`: prose at the length and depth specified by the complexity branch above. Narrate the situation as the customer experienced it; this is what an agent would read before opening the ticket.
+- `background`: prose at the length and depth specified by the complexity branch above. Narrate the situation as the customer experienced it; this is what an agent would read before opening the ticket. Name the affected machine once by its model from `products` (e.g. "our CF-600"), so every case of this problem is about that machine.
 - `symptoms`: 1–4 short, **customer-observable** facts (what the customer sees, hears, or measures — e.g. "login page returns 'session expired' after 5s", "device LED blinks red 3×, then off"). These are the *only* structured signals the customer persona is allowed to see; keep them free of internal jargon, root-cause language, or fix instructions.
 
 ### Root cause (internal layer — never shown to the customer)
@@ -61,7 +61,7 @@ Support agents will NOT be told the root cause. They get a troubleshooting guide
 - `diagnosis_plan.preventive_action`: one sentence; `parts`: spare parts the fix needs (may be empty); `safety`: safety notes the agent must give (may be empty).
 
 ### Viable outcomes (internal layer)
-- `viable_outcomes`: which case outcomes this problem can realistically end in, from `fixed_verified`, `fixed_unverified`, `workaround`, `pending_visit`, `pending_part`, `pending_customer_test`, `escalated_open`, `not_a_fault`, `abandoned`. List 3–6. Include `pending_part` / `pending_visit` only if the fix needs a part or an on-site technician; `not_a_fault` only if the root cause is handling, settings or expectations rather than a defect; `workaround` only if `diagnosis_plan.workaround` is set.
+- `viable_outcomes`: which case outcomes this problem can realistically end in, from `fixed_verified`, `fixed_unverified`, `workaround`, `pending_visit`, `pending_part`, `pending_customer_test`, `escalated_open`, `not_a_fault`, `abandoned`. List 3–6. Include `fixed_verified` / `fixed_unverified` only if the fix can be applied while the customer is in contact (by the customer, remotely, or by sending the right document), without waiting for a part or a visit; `pending_part` / `pending_visit` only if the fix needs a part or an on-site technician; `not_a_fault` only if the root cause is handling, settings or expectations rather than a defect; `workaround` only if `diagnosis_plan.workaround` is set.
 
 ## Anti-patterns (each maps to a checker rule id)
 - `complexity_mismatch` — do not set `complexity` to a value other than `{{ inputs.target_complexity }}`.

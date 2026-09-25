@@ -45,13 +45,18 @@ def test_single_contact_runs_every_check_and_reaches_the_cause() -> None:
 
 def test_follow_up_contact_agrees_the_next_check_as_the_customers_test() -> None:
     first, second = plan_beats(_plan(), ["follow_up", "final"], ProblemState.PENDING_PART)
-    assert first.checks == [0, 1]
-    assert first.next_check == 2
+    assert first.checks == [0]
+    assert first.next_check == 1
     assert first.problem_state == ProblemState.PENDING_CUSTOMER_TEST
     assert first.cause_confirmed is False
-    assert second.checks == [2]
+    assert second.checks == [1, 2]  # the final contact takes the remainder
     assert second.cause_confirmed is True
     assert second.problem_state == ProblemState.PENDING_PART
+
+
+def test_final_contact_keeps_a_check_when_there_are_fewer_checks_than_contacts() -> None:
+    first, second = plan_beats(_plan(1), ["dropped", "final"], ProblemState.FIXED_VERIFIED)
+    assert (first.checks, second.checks) == ([], [0])
 
 
 def test_dropped_contact_leaves_no_state_and_agrees_nothing() -> None:
