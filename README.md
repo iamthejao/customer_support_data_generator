@@ -458,7 +458,7 @@ cases:
 
 The number of entries is the number of cases. The proportional allocation plan is built for that many cases first, then each entry overrides what it pins, so unpinned dimensions stay deterministic. A pinned `problem_state` wins over the problem's viable outcomes. The plan is recorded in `runs.config_snapshot_json`.
 
-`--problems-from <run_id>` reuses the committed problems (with their diagnosis plans) of an earlier run in the same database: Phase 1 is skipped, and the run is stored with `phase='phase2'` and that `parent_run_id`. The earlier run must have used the same company seed. Together they render the same problem in another channel:
+`--problems-from <run_id>` reuses the committed problems (with their diagnosis plans) of an earlier run in the same database: Phase 1 is skipped, and the run is stored with `phase='phase2'` and that `parent_run_id`. The earlier run must have used the same company seed. With the same `--seed` and the same plan slot, the case facts (machine, serial number, site, caller role) come out identical too, so the two runs are parallel variants of one case. Together they render the same problem in another channel:
 
 ```bash
 csfd generate --company kalvora --problems 3 --tickets 3                   # prints <run_a>
