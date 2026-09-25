@@ -310,59 +310,79 @@ data/exports/<run_id>/transcripts/
     call_01.txt            # the transcript (email_01.txt on the email channel)
 ```
 
-By default each transcript file is a `key: value` header, a blank line, then the conversation (see the style options below). A call transcript has one line per utterance (`--no-timestamps` drops the `[HH:MM:SS]` prefixes). The two samples below are real output from small `claude_code_cli` runs with two contacts per case, each showing the second contact (the email bodies are shortened with `[…]`).
+By default each transcript file is a `key: value` header, a blank line, then the conversation (see the style options below). A call transcript has one line per utterance (`--no-timestamps` drops the `[HH:MM:SS]` prefixes). The two samples below are real output from small `claude_code_cli` runs (Sonnet generating, Haiku checking) with two contacts per case, each showing the second contact: a Kalvora Dental call that reaches the cause from the program-set version the caller read out after the first call, and a Norrholt Glass Machinery email thread (email bodies shortened with `[…]`).
 
 ```text
 CALL TRANSCRIPT
-case_id: 841e40a2-…:000001
+case_id: 0c9dd966-…:000001
 call: 2 of 2
 channel: phone (inbound)
-started_at: 2026-01-08T09:19:38+00:00
-ended_at: 2026-01-08T09:23:49+00:00
-duration: 00:04:11
-since_previous_call: 17h 53m
-caller: Customer-standard-0001 (standard tier)
-agent: Agent-l1-0001 (L1 Support)
+started_at: 2026-01-09T13:30:22+00:00
+ended_at: 2026-01-09T13:32:49+00:00
+duration: 00:02:26
+since_previous_call: 4h 33m
+caller: Customer-premium-0001 (premium tier)
+agent: Agent-l2-0001 (L2 Support)
 
-[00:00:00] AGENT: Thank you for calling CoolTherm Industrial Chillers support, this is Agent-l1-0001. How can I help you today?
-[00:00:07] CUSTOMER: Hi, this is Customer-standard-0001 calling back about the temperature control issue on our CT-5000. I spoke with someone yesterday who said Level 2 would reach out within a few hours to tune the PID settings, but I haven't heard from anyone yet and the chiller's still cycling every couple minutes.
-[00:00:28] AGENT: I apologize for that delay - you definitely should have heard from Level 2 by now. Let me check on the status of your escalation right away and make sure we get this prioritized. Can you hold for just a moment while I reach out to the team?
-[00:00:48] CUSTOMER: Sure, no problem — I can hold.
-[00:00:51] (caller on hold, 00:02:48)
-[00:03:40] AGENT: Thanks for holding. I've contacted the Level 2 team and they're going to call you back within the next hour to remotely tune those PID parameters. I've flagged this as high priority since you've been waiting since yesterday. You should see a call from a CoolTherm technical number - they'll be able to access your unit remotely and get that temperature control stabilized. Is there anything else I can help with while I have you on the line?
+[00:00:00] AGENT: Hi, thanks for calling Kalvora Dental. This is Agent-l2-0001, how can I help you today?
+[00:00:06] CUSTOMER: Hi, it's Customer-premium-0001 again, dental assistant at Boechat in Chevalley, calling about the SX-1500, serial ending 062-WO. I called earlier this morning about the sintered crowns coming out patchy and the shade not matching the Zirvelle box, and I did what was asked, I checked the furnace's system screen and it shows program set P-2025.1. But honestly nothing's changed, we're still getting the same chalky, uneven crowns and it's been hours now, we really need this fixed.
+[00:00:38] AGENT: Thanks for that, and sorry it's been such a frustrating morning. So P-2025.1 is what's currently installed, which tells me the newer program set with the Zirvelle sintering program isn't on there yet. I'd like to walk you through installing that update now through Kalvora Connect, is that all right?
+[00:00:58] CUSTOMER: Yeah, okay, that's fine, let's go ahead and do the update through Kalvora Connect.
+[00:01:05] AGENT: Great, so head over to Kalvora Connect on the furnace, and look for the pending update to program set P-2025.2. Go ahead and download and install that now, and let me know once it's finished.
+[00:01:19] CUSTOMER: Okay, give me a second.[pause] Alright, it's downloaded and installed now, shows P-2025.2 on the screen.
+[00:01:29] AGENT: Perfect, P-2025.2 is exactly what we needed. Can you check the program list now and confirm the Zirvelle ML sintering program shows up there?
+[00:01:40] CUSTOMER: Okay, hold on, let me look.[pause] Yeah, I see it, Zirvelle ML is listed now under the sintering programs.
+[00:01:52] AGENT: That's great news. Now that the Zirvelle ML program is there, can you go ahead and re-sinter a test piece with it, and let me know how the shade compares to the disc's reference once it's done?
+[00:02:08] CUSTOMER: Okay, hold on, let me sinter one now.[pause] Alright, it's out and cooled down enough to check, and... yeah, actually this one looks even, no patchy spots, and the shade matches the reference on the box. That's a relief, finally.
 ```
 
 An email thread has one block per message:
 
 ```text
 EMAIL THREAD
-case_id: df8e0bab-…:000001
+case_id: 1ab7743c-…:000001
 thread: 2 of 2
 channel: email
-started_at: 2026-01-08T09:19:38+00:00
-ended_at: 2026-01-08T09:25:07+00:00
-since_previous_thread: 17h 43m
-subject: Re: Chiller temperature cycling - completed requested checks
-customer: Customer-standard-0001 (standard tier)
+started_at: 2026-01-26T09:22:22+00:00
+ended_at: 2026-01-26T10:56:07+00:00
+since_previous_thread: 2d 20h 20m
+subject: Follow-up: FX-612 invert parts list still pending – 3 days on
+customer: Customer-enterprise-0001 (enterprise tier)
 agent: Agent-l1-0001 (L1 Support)
 
-From: Customer-standard-0001 <customer-standard-0001@customer.example>
-To: CoolTherm Industrial Chillers Support <support@cooltherm-industrial-chillers.example>
-Date: Thu, 08 Jan 2026 09:19:38 +0000
-Subject: Re: Chiller temperature cycling - completed requested checks
+From: Customer-enterprise-0001 <customer-enterprise-0001@customer.example>
+To: Norrholt Glass Machinery Support <support@norrholt-glass-machinery.example>
+Date: Mon, 26 Jan 2026 09:22:22 +0000
+Subject: Follow-up: FX-612 invert parts list still pending – 3 days on
 
-I completed the checks you requested yesterday. The refrigerant sight glass shows no bubbles during operation, and I didn't find any obvious leaks at the service ports. I've been recording outlet temperatures from the evaporator over the […]
+Hello,
+
+Following up on my ticket from Friday about the invert mechanism rebuild parts list and drawings for our FX-612 (serial FX612-7979-RV) — our shutdown is getting closer and we still don't have anything […]
+
+Thank you,
+Production Manager, Emo-Trillini SPA
 
 ----------------------------------------
-From: Agent-l1-0001, CoolTherm Industrial Chillers Support <support@cooltherm-industrial-chillers.example>
-To: Customer-standard-0001 <customer-standard-0001@customer.example>
-Date: Thu, 08 Jan 2026 09:25:07 +0000
-Subject: Re: Chiller temperature cycling - completed requested checks
+From: Agent-l1-0001, Norrholt Glass Machinery Support <support@norrholt-glass-machinery.example>
+To: Customer-enterprise-0001 <customer-enterprise-0001@customer.example>
+Date: Mon, 26 Jan 2026 10:50:02 +0000
+Subject: Re: Follow-up: FX-612 invert parts list still pending – 3 days on
 
-Thank you for completing those checks. The clear sight glass is good news, but the persistent cycling and overshoot behavior, especially after your recent maintenance, points to a thermostatic expansion valve issue or a marginal […]
+Thanks for confirming that — I've cross-checked our equipment records against serial FX612-7979-RV, and they show servo invert generation 3 fitted to your machine, matching what you read off the tag,  […]
 
-On Thu, 08 Jan 2026 at 09:19, Customer-standard-0001 wrote:
-> I completed the checks you requested yesterday. The refrigerant sight glass shows no bubbles during…
+On Mon, 26 Jan 2026 at 09:22, Customer-enterprise-0001 wrote:
+> Hello,
+
+----------------------------------------
+From: Customer-enterprise-0001 <customer-enterprise-0001@customer.example>
+To: Norrholt Glass Machinery Support <support@norrholt-glass-machinery.example>
+Date: Mon, 26 Jan 2026 10:56:07 +0000
+Subject: Re: Follow-up: FX-612 invert parts list still pending – 3 days on
+
+Received, thank you. I've compared the part numbers and drawing revision against the markings on our installed invert mechanism and they line up correctly. […]
+
+On Mon, 26 Jan 2026 at 10:50, Agent-l1-0001 wrote:
+> Thanks for confirming that — I've cross-checked our equipment records against serial FX612-7979-RV,…
 ```
 
 A case with several contacts gets `call_01.txt`, `call_02.txt`, … (or `email_01.txt`, …) in the same folder. Each later file's header adds `since_previous_call:` / `since_previous_thread:`. See [Multi-call cases](#multi-call-cases-rounds).
@@ -377,11 +397,11 @@ Two options change the layout for downstream parsers. Set them under `storage.tr
 | `header_style` | `csfd` (default: the header above), `wissant` (only `call_id:` and `call_date:` — `thread_id:` / `thread_date:` for email — closed by a `---` line, the metadata block wissant's call-transcript adapter reads), `none` (the conversation only). |
 
 ```text
-call_id: CSFD-429417D7-1-2
-call_date: 2026-01-23
+call_id: CSFD-0C9DD966-1-2
+call_date: 2026-01-09
 ---
-[00:00:00] Agent: Thank you for calling CoolTherm Industrial Chillers support, this is Agent-l2-0001. How can I help you today?
-[00:00:08] Caller (maintenance technician): Yeah hi, I called yesterday about our CT-500 […]
+[00:00:00] Agent: Hi, thanks for calling Kalvora Dental. This is Agent-l2-0001, how can I help you today?
+[00:00:06] Caller (dental assistant): Hi, it's Customer-premium-0001 again, dental assistant at Boechat in Chevalley, calling about the SX-1500, serial ending 062-WO. I called earlier this morning about the sintered crowns coming out patchy and the shade not matching the Zirvelle box, and I did what was asked, I checked the furnace's system screen and it shows program set P-2025.1. But honestly nothing's changed, we're still getting the same chalky, uneven crowns and it's been hours now, we really need this fixed. […]
 ```
 
 ## Case facts
