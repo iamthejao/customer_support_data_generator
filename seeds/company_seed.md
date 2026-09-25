@@ -105,6 +105,39 @@ on-site OEM technicians called in for hardware failures.
 
 ---
 
+## Case facts
+
+Structured values the generator draws each case's facts from (the machine, the customer site and
+the caller's job role), so both sides of a conversation talk about the same machine. Serial formats
+use `#` for a digit and `?` for an upper-case letter. The CT-300 and CT-800 are **[inferred]**
+siblings of the flagship.
+
+### Assets
+
+| Model | Description | Serial format |
+|---|---|---|
+| CT-500 | Mid-size industrial water chiller (flagship) | CT500-####-?? |
+| CT-300 | Compact industrial water chiller | CT300-####-?? |
+| CT-800 | High-capacity industrial water chiller | CT800-####-?? |
+
+### Caller roles
+
+- maintenance technician
+- maintenance supervisor
+- plant engineer
+- production manager
+- shift supervisor
+- facilities manager
+
+### Site locales
+
+- en_GB
+- en_US
+- de_AT
+- de_DE
+
+---
+
 ## Strategic context — why CoolTherm is the right example
 
 CoolTherm is built to embody two forces reshaping machine manufacturing. First, **aftermarket and

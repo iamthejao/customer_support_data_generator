@@ -226,3 +226,29 @@ def test_generate_rejects_zero_rounds() -> None:
     # Rich styles the flag name, splitting it with colour codes when the
     # terminal is colourised (as it is on CI), so match the plain text.
     assert "--rounds" in _ANSI.sub("", result.output)
+
+
+def test_export_transcript_style_flags(tmp_path: Path) -> None:
+    db_path = tmp_path / "runs.sqlite"
+    _seed_email_case(db_path)
+    out = tmp_path / "exports"
+    args = ["export", RUN_ID, "--format", "transcripts", "--sqlite-path", str(db_path)]
+    styles = ["--header-style", "wissant", "--speaker-style", "role"]
+    result = runner.invoke(app, [*args, "--out", str(out), *styles])
+    assert result.exit_code == 0, result.output
+    text = (out / RUN_ID / "transcripts" / "case_000001" / "email_01.txt").read_text()
+    assert text.splitlines()[:3] == [
+        "thread_id: CSFD-RUN-1-1",
+        "thread_date: 2026-01-06",
+        "---",
+    ]
+    assert text.splitlines()[3].startswith("From: Customer-premium-0001")
+
+
+def test_export_rejects_unknown_transcript_styles() -> None:
+    result = runner.invoke(app, ["export", RUN_ID, "--speaker-style", "shout"])
+    assert result.exit_code != 0
+    assert "must be one of: upper, title, role" in result.output
+    result = runner.invoke(app, ["export", RUN_ID, "--header-style", "xml"])
+    assert result.exit_code != 0
+    assert "must be one of: csfd, wissant, none" in result.output

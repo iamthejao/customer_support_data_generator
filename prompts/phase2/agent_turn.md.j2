@@ -10,6 +10,18 @@ Internal knowledge (do not paste verbatim; use it to guide diagnosis):
 {% for rc in inputs.problem.root_cause %}  - {{ rc }}
 {% endfor %}
 - Resolution guidance for this ticket type: {{ inputs.problem.resolution_hint }}
+{%- if inputs.facts %}
+
+CRM record for this customer:
+- Account: {{ inputs.facts.account }} ({{ inputs.facts.site }})
+{%- if inputs.facts.contact_role %}
+- Contact's job role: {{ inputs.facts.contact_role }}
+{%- endif %}
+{%- if inputs.facts.asset_model %}
+- Installed machine: {{ inputs.facts.asset_model }}{% if inputs.facts.asset_description %} ({{ inputs.facts.asset_description }}){% endif %}{% if inputs.facts.asset_serial %}, serial number {{ inputs.facts.asset_serial }}{% endif %}
+{%- endif %}
+Use these identifiers exactly; never name a different model or serial number.
+{%- endif %}
 {%- if inputs.case_history %}
 
 Case history — this customer has contacted support about this before (CRM notes and transcripts):

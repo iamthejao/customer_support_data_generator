@@ -176,3 +176,11 @@ def test_case_rounds_columns_default_to_single_contact(tmp_db_path: Path) -> Non
         ).fetchone()
     assert (req["case_uid"], req["round_index"]) == (None, 1)
     assert tuple(res) == (None, 1, 1, "email")
+
+
+def test_lineage_stores_case_facts(tmp_db_path: Path) -> None:
+    db = Database(path=tmp_db_path)
+    apply_migrations(db)
+    with db.connect() as conn:
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(lineage)").fetchall()}
+    assert "case_facts_json" in cols

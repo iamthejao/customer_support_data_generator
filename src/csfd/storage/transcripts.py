@@ -15,7 +15,19 @@ transcript: ``[HH:MM:SS] SPEAKER: text`` lines for a call, or a thread of
 emails (From / To / Date / Subject, body, a one-line quote of the message
 replied to) for email. Addresses use reserved ``.example`` domains. Ground
 truth (root cause, resolution hints) is deliberately not written here; join
-``case.json``'s ``problem_id`` against ``problems.jsonl``.
+``case.json``'s ``problem_id`` against ``problems.jsonl``. ``case.json`` does
+carry the case's seeded facts (machine, site, caller role; see csfd.facts).
+
+Two options change the text layout for downstream parsers (defaults keep the
+format above):
+
+* ``speaker_style`` (call transcripts only; emails carry From/To lines):
+  ``upper`` (``AGENT:``), ``title`` (``Agent:``) or ``role`` (``Agent:`` and
+  ``Caller (maintenance technician):``, from the case facts' caller role).
+* ``header_style``: ``csfd`` (the header above), ``wissant`` (only the
+  ``call_id`` / ``call_date`` keys wissant's call-transcript adapter reads —
+  ``thread_id`` / ``thread_date`` for email — closed by a ``---`` line) or
+  ``none`` (transcript text only).
 """
 
 from __future__ import annotations
@@ -29,12 +41,13 @@ from pathlib import Path
 from typing import Any
 
 from csfd.calls import HOLD_TAG, format_offset
+from csfd.settings import HeaderStyle, SpeakerStyle
 from csfd.storage.db import Database
 from csfd.ticket_types.definitions import TICKET_TYPE_METADATA, TicketType
 
 _CASES_SQL = """
 SELECT l.ticket_uid, l.slot_index, l.problem_id, l.ticket_type,
-       l.customer_tier, l.customer_tone,
+       l.customer_tier, l.customer_tone, l.case_facts_json,
        ir.customer_name, ir.channel, ir.subject,
        res.resolution_uid, res.turns_json, res.resolved, res.quality_flag,
        res.agent_name, res.end_reason, res.started_at, res.ended_at, res.duration_s,
@@ -96,6 +109,7 @@ class Case:
     channel: str
     customer_name: str
     company_name: str | None = None
+    facts: dict[str, Any] | None = None
     contacts: list[Contact] = field(default_factory=list)
 
     @property
@@ -138,6 +152,7 @@ def load_cases(db: Database, run_id: str) -> list[Case]:
                 channel=r["channel"],
                 customer_name=r["customer_name"],
                 company_name=company_name,
+                facts=json.loads(r["case_facts_json"]) if r["case_facts_json"] else None,
             )
         case.contacts.append(
             Contact(
@@ -182,6 +197,16 @@ def _format_gap(seconds: float) -> str:
     return " ".join(parts)
 
 
+def _wissant_header(case: Case, contact: Contact) -> list[str]:
+    """Just the reference and date keys, closed by ``---`` (wissant's metadata block)."""
+    noun = "call" if contact.channel == "phone" else "thread"
+    run = case.run_id.split("-", 1)[0][:8].upper()
+    lines = [f"{noun}_id: CSFD-{run}-{case.slot_index}-{contact.sequence}"]
+    if contact.started_at is not None:
+        lines.append(f"{noun}_date: {contact.started_at.date().isoformat()}")
+    return [*lines, "---"]
+
+
 def _header(case: Case, contact: Contact) -> list[str]:
     phone = contact.channel == "phone"
     lines = [
@@ -209,7 +234,18 @@ def _header(case: Case, contact: Contact) -> list[str]:
     return lines
 
 
-def _phone_lines(contact: Contact, *, timestamps: bool) -> list[str]:
+def _speaker_label(case: Case, speaker: str, style: SpeakerStyle) -> str:
+    if style == "upper":
+        return speaker.upper()
+    if style == "title" or speaker != "customer":
+        return speaker.title()
+    role = (case.facts or {}).get("caller_role")
+    return f"Caller ({role})" if role else "Caller"
+
+
+def _phone_lines(
+    case: Case, contact: Contact, *, timestamps: bool, speaker_style: SpeakerStyle
+) -> list[str]:
     lines: list[str] = []
     for turn in contact.turns:
         text = str(turn["content"]).strip()
@@ -220,7 +256,7 @@ def _phone_lines(contact: Contact, *, timestamps: bool) -> list[str]:
             if hold:
                 event = f"(caller on hold, {format_offset(hold)})"
                 lines.append(f"[{format_offset(start - hold)}] {event}" if timestamps else event)
-        speaker = str(turn["speaker"]).upper()
+        speaker = _speaker_label(case, str(turn["speaker"]), speaker_style)
         prefix = f"[{format_offset(start)}] " if timestamps and "start_s" in turn else ""
         lines.append(f"{prefix}{speaker}: {text}")
     if contact.end_reason == "dropped":
@@ -284,14 +320,27 @@ def _email_lines(case: Case, contact: Contact) -> list[str]:
     return lines
 
 
-def render_transcript(case: Case, contact: Contact, *, timestamps: bool = True) -> str:
-    """Render one contact as header + blank line + transcript text."""
+def render_transcript(
+    case: Case,
+    contact: Contact,
+    *,
+    timestamps: bool = True,
+    speaker_style: SpeakerStyle = "upper",
+    header_style: HeaderStyle = "csfd",
+) -> str:
+    """Render one contact as header + transcript text (see the module docstring for styles)."""
     body = (
-        _phone_lines(contact, timestamps=timestamps)
+        _phone_lines(case, contact, timestamps=timestamps, speaker_style=speaker_style)
         if contact.channel == "phone"
         else _email_lines(case, contact)
     )
-    return "\n".join([*_header(case, contact), "", *body]) + "\n"
+    if header_style == "none":
+        header: list[str] = []
+    elif header_style == "wissant":
+        header = _wissant_header(case, contact)
+    else:
+        header = [*_header(case, contact), ""]
+    return "\n".join([*header, *body]) + "\n"
 
 
 def _iso(v: datetime | None) -> str | None:
@@ -339,6 +388,7 @@ def case_payload(case: Case, *, utterances: bool = False) -> dict[str, Any]:
         "customer_tier": case.customer_tier,
         "customer_tone": case.customer_tone,
         "customer_name": case.customer_name,
+        "case_facts": case.facts,
         "channel": case.channel,
         "contact_count": len(case.contacts),
         "planned_contact_count": case.contacts[-1].count if case.contacts else 0,
@@ -348,7 +398,13 @@ def case_payload(case: Case, *, utterances: bool = False) -> dict[str, Any]:
 
 
 def export_run_transcripts(
-    db: Database, run_id: str, *, out_dir: Path, timestamps: bool = True
+    db: Database,
+    run_id: str,
+    *,
+    out_dir: Path,
+    timestamps: bool = True,
+    speaker_style: SpeakerStyle = "upper",
+    header_style: HeaderStyle = "csfd",
 ) -> list[Path]:
     """Write per-case transcript folders plus ``cases.jsonl``. Returns the files written."""
     root = out_dir / run_id / "transcripts"
@@ -362,9 +418,14 @@ def export_run_transcripts(
             case_dir.mkdir(exist_ok=True)
             for contact in case.contacts:
                 path = case_dir / contact.file_name
-                path.write_text(
-                    render_transcript(case, contact, timestamps=timestamps), encoding="utf-8"
+                text = render_transcript(
+                    case,
+                    contact,
+                    timestamps=timestamps,
+                    speaker_style=speaker_style,
+                    header_style=header_style,
                 )
+                path.write_text(text, encoding="utf-8")
                 written.append(path)
             meta_path = case_dir / "case.json"
             meta_path.write_text(

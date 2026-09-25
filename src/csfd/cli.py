@@ -15,7 +15,14 @@ from csfd.pipeline import run_pipeline
 from csfd.prompts.registry import PromptRegistry
 from csfd.seeds.company import parse_company_seed
 from csfd.seeds.scenarios import parse_scenarios_seed
-from csfd.settings import Channel, Disfluency, load_settings
+from csfd.settings import (
+    Channel,
+    Disfluency,
+    HeaderStyle,
+    SpeakerStyle,
+    TranscriptStyleConfig,
+    load_settings,
+)
 from csfd.storage.db import Database
 from csfd.storage.exporters import export_run_to_jsonl, export_run_to_parquet
 from csfd.storage.migrations.runner import apply_migrations
@@ -50,6 +57,24 @@ _COMPANY_SEED_STUB = """\
 
 Replace this stub with your company background: products, policies, tone of voice,
 customer segments, KB style conventions.
+
+## Case facts
+
+What each case's facts are drawn from (see the README's "Case facts").
+
+### Assets
+
+| Model | Description | Serial format |
+|---|---|---|
+| XY-100 | Replace with a product customers own | XY100-####-?? |
+
+### Caller roles
+
+- maintenance technician
+
+### Site locales
+
+- en_US
 """
 
 
@@ -200,6 +225,13 @@ def generate(
     typer.echo(run_id)
 
 
+def _transcript_style(profile: str | None) -> TranscriptStyleConfig:
+    """Transcript layout from YAML; the defaults when exporting outside a configured checkout."""
+    if profile is None and not Path("config/default.yaml").exists():
+        return TranscriptStyleConfig()
+    return load_settings(profile=profile).storage.transcripts
+
+
 @app.command()
 def export(
     run_id: str = typer.Argument(...),
@@ -217,6 +249,20 @@ def export(
         "--timestamps/--no-timestamps",
         help="Prefix phone transcript lines with [HH:MM:SS] call offsets.",
     ),
+    speaker_style: str | None = typer.Option(
+        None,
+        "--speaker-style",
+        help="Call transcript speaker labels: upper (AGENT:) | title (Agent:) | role "
+        "(Agent: / Caller (<job role>):). Emails are unaffected. "
+        "Overrides storage.transcripts.speaker_style.",
+    ),
+    header_style: str | None = typer.Option(
+        None,
+        "--header-style",
+        help="Transcript header: csfd (full key: value header) | wissant (call_id / call_date "
+        "block closed by ---) | none. Overrides storage.transcripts.header_style.",
+    ),
+    profile: str | None = typer.Option(None, "--profile"),
 ) -> None:
     """Export a run's artifacts to JSONL, Parquet, and/or text transcripts under <out>/<run_id>/."""
     expansions = {
@@ -229,6 +275,13 @@ def export(
     if format not in expansions:
         raise typer.BadParameter(f"must be one of: {', '.join(expansions)}", param_hint="--format")
     formats = expansions[format]
+    style = _transcript_style(profile)
+    if speaker_style is not None:
+        style.speaker_style = cast(
+            SpeakerStyle, _choice(speaker_style, SpeakerStyle, "--speaker-style")
+        )
+    if header_style is not None:
+        style.header_style = cast(HeaderStyle, _choice(header_style, HeaderStyle, "--header-style"))
     db = Database(path=Path(sqlite_path))
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -237,7 +290,14 @@ def export(
     if "parquet" in formats:
         export_run_to_parquet(db, run_id, out_dir=out_dir)
     if "transcripts" in formats:
-        export_run_transcripts(db, run_id, out_dir=out_dir, timestamps=timestamps)
+        export_run_transcripts(
+            db,
+            run_id,
+            out_dir=out_dir,
+            timestamps=timestamps,
+            speaker_style=style.speaker_style,
+            header_style=style.header_style,
+        )
     typer.echo(f"Exported run {run_id} to {out_dir / run_id}.")
 
 

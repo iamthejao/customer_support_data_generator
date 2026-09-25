@@ -35,7 +35,7 @@ Each run is driven by two kinds of inputs: **seed files** that describe the fict
 
 Markdown documents that ground generation in a concrete business. They are referenced from the generator prompts and are the only source of domain-specific content; swap them out to retarget the generator at a different company or industry without touching code.
 
-- **`seeds/company_seed.md`** — the company profile. Identity, sector, products (e.g. the flagship CT-500 chiller), representative components, customer segments, and service organisation. This is what makes generated problems and resolutions sound like they belong to a real manufacturer rather than a generic SaaS.
+- **`seeds/company_seed.md`** — the company profile. Identity, sector, products (e.g. the flagship CT-500 chiller), representative components, customer segments, and service organisation. This is what makes generated problems and resolutions sound like they belong to a real manufacturer rather than a generic SaaS. Its structured `## Case facts` section (an `### Assets` table of `Model | Description | Serial format`, plus `### Caller roles` and `### Site locales` bullet lists) is what each case's facts are drawn from — see [Case facts](#case-facts). Serial formats use `#` for a digit and `?` for an upper-case letter. A seed without the section still works, but its cases get no machine or caller role.
 - **`seeds/scenarios_seed.md`** — the customer-service case catalogue. A structured list of business cases (documentation requests, L1/L2/L3 troubleshooting, field-service escalations) with tags, escalation tier, as-is process, sample-data hints, and systems touched. The generator uses these as the templates that Phase 1 problems and Phase 2 resolutions are built against.
 
 `csfd init` scaffolds both files; the shipped versions describe the fictional **CoolTherm Industrial Chillers** company used as the running example.
@@ -68,7 +68,7 @@ The resolved config (default + active profile) is persisted as `runs.config_snap
 
 1. **Phase 1 — Problem Database** — generate `problem_database.count` problems with target complexities driven by `complexity_proportions` (largest-remainder rounding). Each problem flows through a `generate_problem → validate_problem → commit_problem` retry sub-loop.
 2. **Allocator** — `csfd.allocator.build_allocation_plan` produces a fully deterministic plan: every ticket slot's `(problem_id, ticket_type, customer_tier, customer_tone)` is chosen before any LLM call.
-3. **Phase 2 — Resolution per slot** — for each slot, a turn-based dialogue between two information-asymmetric agents produces the conversation. A customer agent (which sees only the problem's symptoms, impact, and persona) opens with the standalone incoming request; a service agent (which sees the root cause, background, and resolution hint) replies. Turns alternate — one LLM call each — until whichever speaker just spoke flags the conversation done, or a hard `dialogue.turn_cap` is reached. A consistency agent then reviews the full transcript and may pass it, pass it with edits, or fail it (a fail re-rolls the whole conversation within the same retry budget as Phase 1). Conversation length is emergent: simple problems resolve in 2–3 turns, complex ones take more. This costs more LLM calls per slot than a single-shot generator — typically ~4–10 turn calls plus one consistency call.
+3. **Phase 2 — Resolution per slot** — for each slot, a turn-based dialogue between two information-asymmetric agents produces the conversation. A customer agent (which sees only the problem's symptoms, impact, and persona, plus the [case facts](#case-facts) a customer knows) opens with the standalone incoming request; a service agent (which sees the root cause, background, resolution hint, and the case facts a CRM shows) replies. Turns alternate — one LLM call each — until whichever speaker just spoke flags the conversation done, or a hard `dialogue.turn_cap` is reached. A consistency agent then reviews the full transcript and may pass it, pass it with edits, or fail it (a fail re-rolls the whole conversation within the same retry budget as Phase 1). Conversation length is emergent: simple problems resolve in 2–3 turns, complex ones take more. This costs more LLM calls per slot than a single-shot generator — typically ~4–10 turn calls plus one consistency call.
 
 Three output datasets per run: **`incoming_requests`** (denormalized customer requests), **`resolutions`** (multi-turn conversations), and **`lineage`** (problem → request → resolution traceability). Every LLM call also writes one row to **`agent_traces`** with `prompt_id`, `model_provider`, `model_id`, `latency_ms`, and (for checkers) `verdict` / `verdict_issues_json` — checker traces link to their generator via `parent_trace_id`.
 
@@ -248,9 +248,9 @@ A single `csfd generate` invocation walks the parent graph from top to bottom. E
 
 9. **Build the allocation plan.** Phase 2 starts with `build_allocation_plan`, which is the deterministic core of the system: before any Phase 2 LLM call, `csfd.allocator.build_allocation_plan` reads `tickets.total` plus the type / tier / tone proportions and produces the full list of slots. Each slot is a fixed tuple `(slot_index, problem_id, ticket_type, customer_tier, customer_tone, customer_name)`. The same seed and config always produce the same slot list. This node also pre-records `lineage` rows so each slot is traceable even before its request and resolution exist.
 
-10. **Run the turn-based dialogue for a slot.** `generate_incoming_request` makes the customer's opening LLM call (symptoms + persona only) and seeds turn 1. Then `generate_agent_turn` and `generate_customer_turn` alternate — one LLM call each, each writing an `agent_traces` row — with the customer agent seeing only customer-observable fields and the service agent seeing only root-cause fields. The loop ends when whichever speaker just spoke flags `done`, or when `dialogue.turn_cap` is hit (committed with a `warning:turn_cap_hit` flag).
+10. **Run the turn-based dialogue for a slot.** `generate_incoming_request` makes the customer's opening LLM call (symptoms + persona + the case facts a customer knows) and seeds turn 1. Then `generate_agent_turn` and `generate_customer_turn` alternate — one LLM call each, each writing an `agent_traces` row — with the customer agent seeing only customer-observable fields and the service agent seeing only root-cause fields. The loop ends when whichever speaker just spoke flags `done`, or when `dialogue.turn_cap` is hit (committed with a `warning:turn_cap_hit` flag).
 
-11. **Validate the conversation.** `validate_conversation` runs the consistency agent over the full transcript, with its own trace row linked via `parent_trace_id`. It returns pass, pass-with-edits (the transcript is rewritten in place and flagged `info:consistency_edited`), or fail.
+11. **Validate the conversation.** `validate_conversation` runs the consistency agent over the full transcript, with its own trace row linked via `parent_trace_id`. It sees the problem background and the case facts, and checks that identifiers, dates and history in the dialogue match them. It returns pass, pass-with-edits (the transcript is rewritten in place and flagged `info:consistency_edited`), or fail. A code-level check then scans the resulting text for machine models and serial numbers shaped like the company catalogue's; one that differs from the case record fails the attempt too.
 
 12. **Retry sub-loop.** Fail + retries left → re-roll the whole conversation from `generate_incoming_request`. Retries exhausted → accept with a quality flag.
 
@@ -357,7 +357,32 @@ On Thu, 08 Jan 2026 at 09:19, Customer-standard-0001 wrote:
 
 A case with several contacts gets `call_01.txt`, `call_02.txt`, … (or `email_01.txt`, …) in the same folder. Each later file's header adds `since_previous_call:` / `since_previous_thread:`. See [Multi-call cases](#multi-call-cases-rounds).
 
-The transcript folder deliberately holds no ground truth. Join `case.json`'s `problem_id` against `problems.jsonl` to score a downstream report against the root cause and resolution hints.
+The transcript text deliberately holds no ground truth. `case.json` carries the case's seeded `case_facts` (machine, serial number, site, caller role; see [Case facts](#case-facts)); join its `problem_id` against `problems.jsonl` to score a downstream report against the root cause and resolution hints.
+
+Two options change the layout for downstream parsers. Set them under `storage.transcripts` in YAML or with `--speaker-style` / `--header-style` on `csfd export`; the defaults produce the format above.
+
+| Option | Values |
+|---|---|
+| `speaker_style` | `upper` (default: `AGENT:` / `CUSTOMER:`), `title` (`Agent:` / `Customer:`), `role` (`Agent:` / `Caller (maintenance technician):`, from the case's caller role). Call transcripts only; emails keep their `From:` / `To:` lines. |
+| `header_style` | `csfd` (default: the header above), `wissant` (only `call_id:` and `call_date:` — `thread_id:` / `thread_date:` for email — closed by a `---` line, the metadata block wissant's call-transcript adapter reads), `none` (the conversation only). |
+
+```text
+call_id: CSFD-429417D7-1-2
+call_date: 2026-01-23
+---
+[00:00:00] Agent: Thank you for calling CoolTherm Industrial Chillers support, this is Agent-l2-0001. How can I help you today?
+[00:00:08] Caller (maintenance technician): Yeah hi, I called yesterday about our CT-500 […]
+```
+
+## Case facts
+
+Every case gets a seeded record of facts before any dialogue is generated, so both speakers talk about the same machine instead of inventing one (`csfd.facts`):
+
+- **Asset** — a model from the company seed's `### Assets` table (a model the problem record already names wins; otherwise a seeded pick) and a serial number in that model's serial format.
+- **Site** — the customer's company, city and country, drawn with [Faker](https://faker.readthedocs.io/) in one of the seed's `### Site locales`.
+- **Caller role** — one of the seed's `### Caller roles`.
+
+The customer prompts get the facts a customer knows (their job role, site, and the model and serial number on the nameplate); the agent prompts get the facts a CRM shows (account, contact role, installed machine). Neither prompt asks a speaker to make identifiers up. The consistency checker sees the record, and a code check fails any attempt whose transcript names a different catalogue-shaped model or serial number. On the re-roll, both speakers are told which identifier went wrong. The record is stored in `lineage.case_facts_json` and exported in `case.json` / `cases.jsonl`. The same `run_seed` draws the same facts. Databases created before this column existed are not upgraded (the schema is `CREATE ... IF NOT EXISTS`), so recreate the SQLite file before generating into it.
 
 ## Multi-call cases (rounds)
 
@@ -504,6 +529,7 @@ Embedding-based dedup is enabled in `local-only` and `mixed` (which run against 
 | `csfd generate --channel phone [--disfluency none\|light\|moderate]` | generate phone-call transcripts instead of email tickets |
 | `csfd generate --rounds N` | make every case N related contacts (callbacks); mixes go in `tickets.rounds.proportions` |
 | `csfd export RUN_ID --format jsonl\|parquet\|both\|transcripts\|all [--no-timestamps]` | dump to `data/exports/<run_id>/` (`both` = JSONL + Parquet; `all` adds transcripts) |
+| `csfd export RUN_ID --format transcripts --speaker-style upper\|title\|role --header-style csfd\|wissant\|none` | change transcript speaker labels and header layout (see [Transcript export](#transcript-export)) |
 | `csfd inspect RUN_ID` | print summary stats |
 | `csfd render-graphs` | regenerate `docs/diagrams/*.mmd` |
 

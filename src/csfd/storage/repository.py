@@ -670,6 +670,8 @@ class LineageRecord:
     incoming_request_id: int | None
     resolution_id: int | None
     created_at: datetime
+    # The case's seeded facts (csfd.facts.CaseFacts as a dict), part of its ground truth.
+    case_facts: dict[str, Any] | None = None
 
 
 class LineageRepo:
@@ -683,8 +685,8 @@ class LineageRepo:
                 INSERT OR IGNORE INTO lineage
                   (ticket_uid, run_id, slot_index, problem_id, ticket_type,
                    customer_tier, customer_tone, incoming_request_id,
-                   resolution_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   resolution_id, created_at, case_facts_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     r.ticket_uid,
@@ -697,6 +699,7 @@ class LineageRepo:
                     r.incoming_request_id,
                     r.resolution_id,
                     r.created_at.isoformat(),
+                    json.dumps(r.case_facts) if r.case_facts is not None else None,
                 ),
             )
 
@@ -731,8 +734,8 @@ class LineageRepo:
                 INSERT OR IGNORE INTO lineage
                   (ticket_uid, run_id, slot_index, problem_id, ticket_type,
                    customer_tier, customer_tone, incoming_request_id,
-                   resolution_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   resolution_id, created_at, case_facts_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     r.ticket_uid,
@@ -745,6 +748,7 @@ class LineageRepo:
                     r.incoming_request_id,
                     r.resolution_id,
                     r.created_at.isoformat(),
+                    json.dumps(r.case_facts) if r.case_facts is not None else None,
                 ),
             )
 

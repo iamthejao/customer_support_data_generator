@@ -402,3 +402,82 @@ def test_single_contact_render_has_no_case_history(registry: PromptRegistry, pro
     assert template.render(inputs=base) == template.render(
         inputs={**base, "round": None, "case_history": []}
     )
+
+
+# ---------- Phase 2: case facts ----------
+
+_CUSTOMER_FACTS = {
+    "role": "maintenance technician",
+    "company": "Wells-Byrne",
+    "site": "North Paulaville, United Kingdom",
+    "asset_model": "CT-500",
+    "asset_serial": "CT500-0862-YR",
+}
+_CRM_FACTS = {
+    "account": "Wells-Byrne",
+    "site": "North Paulaville, United Kingdom",
+    "contact_role": "maintenance technician",
+    "asset_model": "CT-500",
+    "asset_description": "Mid-size chiller",
+    "asset_serial": "CT500-0862-YR",
+}
+_CUSTOMER_PROMPTS = [
+    "phase2.incoming_request",
+    "phase2.customer_turn",
+    "phase2.phone_incoming_request",
+    "phase2.phone_customer_turn",
+]
+
+
+@pytest.mark.parametrize("prompt", _CUSTOMER_PROMPTS)
+def test_customer_prompts_show_the_case_facts(registry: PromptRegistry, prompt: str) -> None:
+    template = registry.get(prompt).template
+    base = _phone_customer_inputs("light")
+    rendered = template.render(
+        inputs={**base, "facts": _CUSTOMER_FACTS, "fact_issues": ["named the CT-4400X"]}
+    )
+    assert "You are the maintenance technician at Wells-Byrne" in rendered
+    assert "CT-500, serial number CT500-0862-YR" in rendered
+    assert "named the CT-4400X" in rendered
+    assert "you may make up" not in rendered
+    # Without facts (a hand-built slot) the prompt renders as before.
+    assert "About you and your machine" not in template.render(inputs=base)
+
+
+@pytest.mark.parametrize("prompt", ["phase2.agent_turn", "phase2.phone_agent_turn"])
+def test_agent_prompts_show_the_crm_record(registry: PromptRegistry, prompt: str) -> None:
+    template = registry.get(prompt).template
+    base = _phone_agent_inputs("light")
+    rendered = template.render(inputs={**base, "facts": _CRM_FACTS})
+    assert "Account: Wells-Byrne (North Paulaville, United Kingdom)" in rendered
+    assert "Installed machine: CT-500 (Mid-size chiller), serial number CT500-0862-YR" in rendered
+    assert "CRM record" not in template.render(inputs=base)
+
+
+def test_consistency_check_sees_background_and_case_record(registry: PromptRegistry) -> None:
+    rendered = registry.get("phase2.conversation_consistency_check").template.render(
+        inputs={
+            "customer_tone": "neutral",
+            "problem": {
+                "title": "t",
+                "complexity": "simple",
+                "background": "Relocated six months ago.",
+                "symptoms": ["s"],
+                "root_cause": ["r"],
+                "resolution_hint": "h",
+            },
+            "facts": {
+                "asset_model": "CT-500",
+                "asset_serial": "CT500-0862-YR",
+                "customer_company": "Wells-Byrne",
+                "site_city": "North Paulaville",
+                "site_country": "United Kingdom",
+                "caller_role": "plant engineer",
+            },
+            "candidate": {"subject": "s", "body": "b", "end_reason": "agent_done", "turns": []},
+        }
+    )
+    assert "Relocated six months ago." in rendered
+    assert "Machine: CT-500, serial number CT500-0862-YR" in rendered
+    assert "plant engineer at Wells-Byrne, North Paulaville, United Kingdom" in rendered
+    assert "(l) Identifiers, dates and history" in rendered

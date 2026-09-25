@@ -11,6 +11,10 @@ information-asymmetric agents:
 * the **service** agent sees only root-cause fields (root cause, background,
   summary, resolution hint) and the conversation so far.
 
+Both also see the case's seeded facts (see :mod:`csfd.facts`): the customer
+what a customer knows (their machine's model and serial, site, job role), the
+agent what the CRM shows, so neither has to invent identifiers.
+
 Turn 1 is the customer's opening message (the standalone incoming request).
 Turns then alternate, starting with the service agent, until whichever speaker
 just spoke flags ``done`` — or a hard ``dialogue.turn_cap`` is reached. With
@@ -85,6 +89,13 @@ from csfd.calls import (
     estimate_turn_timings,
     scripted_greeting,
 )
+from csfd.facts import (
+    CaseFacts,
+    crm_view,
+    customer_view,
+    draw_case_facts,
+    identifier_mismatches,
+)
 from csfd.graph.pipeline_graph import PipelineState, _PlanSlot, _PriorContact, _RoundSpec
 from csfd.pipeline import (
     ConsistencyVerdict,
@@ -103,6 +114,7 @@ from csfd.storage.repository import (
     IncomingRequestRepo,
     LineageRecord,
     LineageRepo,
+    ProblemRecord,
     ResolutionRecord,
     ResolutionRepo,
 )
@@ -208,8 +220,21 @@ def _prompt_name(settings: AppSettings, base: str) -> str:
     return f"phase2.{prefix}{base}"
 
 
+# Issues from the code-level identifier check (csfd.facts); they name no root
+# cause, so a re-roll can show them to the customer as well as to the agent.
+_CASE_FACTS_RULE = "case_facts"
+
+
+def _fact_issues(state: PipelineState) -> list[str]:
+    """Identifier mismatches that failed the previous attempt of this contact."""
+    verdict = state.last_verdict
+    if verdict is None or verdict.passed:
+        return []
+    return [i.explanation for i in verdict.issues if i.rule_violated == _CASE_FACTS_RULE]
+
+
 def _customer_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
-    """Customer-view inputs: symptoms + impact + persona only. No root cause."""
+    """Customer-view inputs: symptoms + impact + persona + own facts only. No root cause."""
     problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
     return {
         "company_name": state.company.name,
@@ -220,6 +245,8 @@ def _customer_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
         "symptoms": problem.symptoms,
         "customer_impact": problem.customer_impact,
         "category": problem.category,
+        "facts": customer_view(slot.facts) if slot.facts else None,
+        "fact_issues": _fact_issues(state),
         "turn_cap": _effective_turn_cap(state),
         **_round_inputs(state, _current_round(state, slot)),
     }
@@ -242,9 +269,17 @@ def _agent_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
             "root_cause": problem.root_cause,
             "resolution_hint": problem.resolution_hints.get(slot.ticket_type.value, ""),
         },
+        "facts": crm_view(slot.facts) if slot.facts else None,
         "turn_cap": _effective_turn_cap(state),
         **_round_inputs(state, rnd),
     }
+
+
+def _problem_text(problem: ProblemRecord) -> str:
+    """Every free-text field of a problem, for spotting a catalogue model it names."""
+    return "\n".join(
+        [problem.title, problem.summary, problem.background, *problem.symptoms, *problem.root_cause]
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -274,6 +309,18 @@ async def build_allocation_plan_node(
         seed=settings.pipeline.run_seed or 0,
     )
 
+    seed = settings.pipeline.run_seed or 0
+    problems_by_id = {p.id: p for p in state.problems_committed}
+    facts: dict[int, CaseFacts] = {
+        s.index: draw_case_facts(
+            state.company.case_facts,
+            seed=seed,
+            slot_index=s.index,
+            problem_text=_problem_text(problems_by_id[s.problem_id]),
+        )
+        for s in plan.slots
+    }
+
     lineage_repo = LineageRepo(db)
     for slot in plan.slots:
         await lineage_repo.acreate(
@@ -289,10 +336,10 @@ async def build_allocation_plan_node(
                 incoming_request_id=None,
                 resolution_id=None,
                 created_at=datetime.now(UTC),
+                case_facts=facts[slot.index].model_dump(),
             ),
         )
 
-    seed = settings.pipeline.run_seed or 0
     round_counts = assign_round_counts(
         [s.index for s in plan.slots], tickets_cfg.rounds.proportions, seed=seed
     )
@@ -321,6 +368,7 @@ async def build_allocation_plan_node(
                     turn_cap=tickets_cfg.dialogue.turn_cap,
                 )
             ],
+            facts=facts[s.index],
         )
         for s in plan.slots
     ]
@@ -515,10 +563,12 @@ async def validate_conversation_node(
         "problem": {
             "title": problem.title,
             "complexity": problem.complexity,
+            "background": problem.background,
             "symptoms": problem.symptoms,
             "root_cause": problem.root_cause,
             "resolution_hint": problem.resolution_hints.get(slot.ticket_type.value, ""),
         },
+        "facts": slot.facts.model_dump() if slot.facts else None,
         "candidate": draft.model_dump(),
         **_round_inputs(state, rnd),
     }
@@ -543,27 +593,36 @@ async def validate_conversation_node(
     verdict = await traced.invoke(AgentContext(inputs=inputs, retry_attempt=state.retry_attempt))
     assert isinstance(verdict, ConsistencyVerdict)
 
-    passed = verdict.status in ("pass", "pass_with_edits")
-    edited = verdict.status == "pass_with_edits"
-    final_draft = _apply_consistency_edits(draft, verdict) if passed else draft
+    llm_passed = verdict.status in ("pass", "pass_with_edits")
+    final_draft = _apply_consistency_edits(draft, verdict) if llm_passed else draft
+    # Code-level backstop on the text that would be committed: a model or serial
+    # number that contradicts the case record fails the attempt like the checker.
+    mismatches = (
+        identifier_mismatches(
+            [final_draft.subject, *(t.content for t in final_draft.turns)],
+            slot.facts,
+            state.company.case_facts,
+        )
+        if slot.facts
+        else []
+    )
+    passed = llm_passed and not mismatches
+    edited = passed and verdict.status == "pass_with_edits"
     quality_flag = state.last_quality_flag
     # An edited transcript is flagged unless a turn-cap-hit already claimed the
     # slot — the cap is the more actionable signal and must not be overwritten.
     if edited and quality_flag != "warning:turn_cap_hit":
         quality_flag = "info:consistency_edited"
-    # Surface the consistency issues on a fail so the re-roll's agent turns can
-    # see them via AgentContext (see _generate_turn's prior_issues wiring).
+    # Surface the issues on a fail so the re-roll's turns can see them via
+    # AgentContext (see _generate_turn's prior_issues and _fact_issues).
+    llm_issues = [] if llm_passed else verdict.issues
     issues = (
         []
         if passed
         else [
-            Issue(
-                severity="error",
-                location="conversation",
-                rule_violated="consistency",
-                explanation=msg,
-            )
-            for msg in verdict.issues
+            Issue(severity="error", location="conversation", rule_violated=rule, explanation=msg)
+            for rule, msgs in (("consistency", llm_issues), (_CASE_FACTS_RULE, mismatches))
+            for msg in msgs
         ]
     )
     return {

@@ -6,6 +6,24 @@ Your symptoms (all you know):
 Impact on you: {{ inputs.customer_impact }}
 Your name: {{ inputs.customer_name }} (a placeholder; if you give your name, say it exactly like this)
 Your tone (keep consistent): {{ inputs.customer_tone }}
+{%- if inputs.facts %}
+
+About you and your machine (these are true; use them when they come up and never invent other identifiers):
+{%- if inputs.facts.role %}
+- You are the {{ inputs.facts.role }} at {{ inputs.facts.company }} ({{ inputs.facts.site }}).
+{%- else %}
+- You work at {{ inputs.facts.company }} ({{ inputs.facts.site }}).
+{%- endif %}
+{%- if inputs.facts.asset_model %}
+- Your machine is a {{ inputs.facts.asset_model }}{% if inputs.facts.asset_serial %}, serial number {{ inputs.facts.asset_serial }} (as on its nameplate){% endif %}.
+{%- endif %}
+{%- endif %}
+{%- if inputs.fact_issues %}
+
+A previous attempt at this conversation got the case facts wrong. Stick to the facts above:
+{% for i in inputs.fact_issues %}- {{ i }}
+{% endfor %}
+{%- endif %}
 {%- if inputs.case_history %}
 
 You have called about this problem before. Your earlier calls (you remember them):
@@ -21,7 +39,8 @@ Call transcript so far (turn {{ inputs.turn_index }} of at most {{ inputs.turn_c
 {% endfor %}
 
 How to respond:
-- Answer the agent's latest words using ONLY your symptoms and what they've told you. Don't invent technical facts you couldn't know. If asked for a model, serial number, or site, you may make up plausible details and then stick to them.
+- Answer the agent's latest words using ONLY your symptoms, the facts about you and your machine above, and what they've told you. Don't invent technical facts you couldn't know.
+- If asked for the model, serial number, or site, give the ones above (you may need a moment to read the nameplate). Never make up different ones.
 - If the agent asks you to check something on the machine, say what you see (you may need a moment: use `[pause]`).
 - Misunderstanding an ambiguous question, or asking the agent to repeat, is realistic and allowed occasionally.
 - If the agent asks you to hold, just agree briefly.

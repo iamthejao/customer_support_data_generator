@@ -178,11 +178,23 @@ class ObservabilityConfig(BaseModel):
     persist_stream_updates: bool = True
 
 
+SpeakerStyle = Literal["upper", "title", "role"]
+HeaderStyle = Literal["csfd", "wissant", "none"]
+
+
+class TranscriptStyleConfig(BaseModel):
+    """Text layout of ``csfd export --format transcripts`` (see csfd.storage.transcripts)."""
+
+    speaker_style: SpeakerStyle = "upper"
+    header_style: HeaderStyle = "csfd"
+
+
 class StorageConfig(BaseModel):
     sqlite_path: str = "data/runs.sqlite"
     checkpoint_sqlite_path: str = ".langgraph_api/checkpoints.sqlite"
     exports_dir: str = "data/exports"
     exports_format: list[str] = Field(default_factory=lambda: ["jsonl", "parquet"])
+    transcripts: TranscriptStyleConfig = Field(default_factory=TranscriptStyleConfig)
 
 
 class EnvSecrets(BaseSettings):
