@@ -57,7 +57,7 @@ How this contact ends for you (the agent does not know this):
 {%- elif inputs.planned.problem_state == "workaround" %}
 - The agent will give you a way to keep working while the real cause is dealt with later. Accept it, and end with `done=true` and `done_reason="customer_satisfied"`.
 {%- elif inputs.planned.problem_state == "not_a_fault" %}
-- The agent will explain that the machine is working as designed. Once it makes sense to you, end with `done=true` and `done_reason="customer_satisfied"`.
+- The agent will explain what is going on and what to do about it. Once it makes sense to you, end with `done=true` and `done_reason="customer_satisfied"`.
 {%- elif inputs.planned.problem_state == "abandoned" %}
 - You run out of patience before the problem is solved: after going along with two or three of the agent's steps, say you can't spend more time on this now, and end with `done=true` and `done_reason="customer_frustrated"`.
 {%- endif %}

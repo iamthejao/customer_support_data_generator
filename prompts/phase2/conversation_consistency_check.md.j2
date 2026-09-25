@@ -25,16 +25,13 @@ Case record (the ground truth both speakers were given):
 
 {%- if inputs.diagnosis %}
 
-Diagnosis plan (the ground truth; the agent was NOT told the root cause, only the candidate causes and the checks without their results; the customer was told each check's finding):
-- Candidate causes: {{ inputs.diagnosis.plan.candidate_causes | join('; ') }}
+Diagnosis plan (the ground truth; the agent was NOT told the root cause, only the candidate causes with the fix for each and the checks without their results; the customer was told each check's finding):
+- Candidate causes and their fixes:
+{% for c in inputs.diagnosis.plan.candidate_causes %}  - {{ c.cause }}{% if c.is_root_cause %} [the root cause]{% endif %}: fix {{ c.resolution_steps | join(' / ') }}{% if c.parts %}; parts: {{ c.parts | join('; ') }}{% endif %}{% if c.verification %}; verification: {{ c.verification }}{% if c.verification_finding %} → {{ c.verification_finding }}{% endif %}{% endif %}{% if c.workaround %}; workaround: {{ c.workaround }}{% endif %}
+{% endfor -%}
 - Checks:
 {% for c in inputs.diagnosis.plan.checks %}  {{ loop.index }}. {{ c.check }}: {{ c.how_to_check }} → customer finds: {{ c.finding }}{% if c.rules_out %} (rules out: {{ c.rules_out | join('; ') }}){% endif %}{% if loop.index == inputs.diagnosis.confirming_step %} [confirms the root cause]{% endif %}
 {% endfor -%}
-- Resolution: {{ inputs.diagnosis.plan.resolution_steps | join(' / ') }}
-- Verification: {{ inputs.diagnosis.plan.verification }}{% if inputs.diagnosis.plan.verification_finding %} → {{ inputs.diagnosis.plan.verification_finding }}{% endif %}
-{%- if inputs.diagnosis.plan.workaround %}
-- Workaround: {{ inputs.diagnosis.plan.workaround }}
-{%- endif %}
 - Already run in earlier contacts: {{ inputs.diagnosis.done_steps | join(', ') if inputs.diagnosis.done_steps else 'none' }}. Planned for this contact: {{ inputs.diagnosis.beat_steps | join(', ') if inputs.diagnosis.beat_steps else 'no new checks' }}.{% if inputs.diagnosis.next_step %} Agreed as the customer's own test for later: check {{ inputs.diagnosis.next_step }}.{% endif %}
 {%- endif %}
 {%- if inputs.planned %}
@@ -59,7 +56,7 @@ Checks (flag and, where fixable by light editing, correct in place):
 - (f) `end_reason` and the implied resolution match what the conversation actually achieved.
 - (l) Identifiers, dates and history stated in the dialogue match the case record and the background: the machine model, serial number, site and company, and past events such as moves, changes or maintenance. Leaving a fact unsaid is fine; a stated detail that contradicts the record is not. Prefer correcting it by editing the turn.
 {%- if inputs.diagnosis %}
-- (m) Diagnosis lineage: the agent names a cause only after the customer has reported the finding that points to it, asks for the checks roughly in the plan's order, and stays within this contact's planned checks. The agent must not know or state the root cause before the evidence is in.
+- (m) Diagnosis lineage: the agent names a cause only after the customer has reported the finding that points to it, asks for the checks roughly in the plan's order, and stays within this contact's planned checks. The agent must not know or state the root cause before the evidence is in, and gives the fix of the root cause, not of another candidate.
 - (n) The customer's reported results match the plan's findings (reworded is fine; a different result is not), and the customer never reports a result for a check the agent did not ask for.
 {%- endif %}
 - (o) Report in `problem_state` the state the conversation ACTUALLY leaves the problem in, judged only from the text: `fixed_verified` (fixed, and the customer confirmed it works), `fixed_unverified` (fix applied, not yet confirmed), `workaround`, `pending_visit`, `pending_part`, `pending_customer_test` (the customer will run a check and report back), `escalated_open`, `not_a_fault`, or `abandoned` (the customer gave up); null if the contact was cut off before any of these. A booked technician or an ordered part is NOT fixed. Do not copy the planned state if the text does not reach it; if it misses the plan in a way light editing can fix, edit the turns and report the state of the edited text.

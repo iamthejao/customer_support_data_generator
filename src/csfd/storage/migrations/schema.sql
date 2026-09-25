@@ -52,8 +52,8 @@ CREATE TABLE IF NOT EXISTS problems (
     customer_impact       TEXT NOT NULL DEFAULT 'degraded'
         CHECK (customer_impact IN ('blocked','degraded','cosmetic','informational')),
     tags_json             TEXT NOT NULL DEFAULT '[]',
-    -- csfd.diagnosis.DiagnosisPlan: candidate causes, ordered checks with the
-    -- customer's findings, resolution, verification, prevention.
+    -- csfd.diagnosis.DiagnosisPlan: candidate causes each with its fix (the root
+    -- cause marked), ordered checks with the customer's findings, safety notes.
     diagnosis_plan_json   TEXT,
     -- csfd.outcomes.ProblemState values the problem can plausibly end in.
     viable_outcomes_json  TEXT NOT NULL DEFAULT '[]'

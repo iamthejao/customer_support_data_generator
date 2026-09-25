@@ -12,6 +12,7 @@ from csfd.outcomes import ProblemState
 from csfd.pipeline import (
     ConsistencyVerdict,
     DialogueTurnOutput,
+    EditedTurn,
     IncomingRequestOutput,
 )
 from tests.integration import _dialogue_harness as h
@@ -37,7 +38,7 @@ def _factory() -> AgentFactory:
                 issues=["smoothed wording"],
                 edited_subject="Power cycling resolved",
                 edited_body="It power-cycles.",
-                edited_turns=_EDITED,
+                edited_turns=[EditedTurn(**t.model_dump()) for t in _EDITED],
                 problem_state=ProblemState.FIXED_VERIFIED,
             ),
         },

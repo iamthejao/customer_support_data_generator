@@ -14,8 +14,20 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
 from csfd.storage.db import Database
 
+
+def run_scope(table: str) -> str:
+    """SQL condition selecting a run's rows of `table`, bound to the run id as ``?1``.
+
+    A run's problems are its own plus those a ``--problems-from`` run reuses
+    from another run (referenced by its lineage).
+    """
+    if table == "problems":
+        return "(run_id = ?1 OR id IN (SELECT problem_id FROM lineage WHERE run_id = ?1))"
+    return "run_id = ?1"
+
+
 _TABLES: dict[str, str] = {
-    "problems": "SELECT * FROM problems WHERE run_id = ?",
+    "problems": f"SELECT * FROM problems WHERE {run_scope('problems')}",
     "incoming_requests": "SELECT * FROM incoming_requests WHERE run_id = ?",
     "resolutions": "SELECT * FROM resolutions WHERE run_id = ?",
     "lineage": "SELECT * FROM lineage WHERE run_id = ?",

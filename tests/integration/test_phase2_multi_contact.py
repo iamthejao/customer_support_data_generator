@@ -218,6 +218,17 @@ def _callback_histories(db: Database) -> list[list[dict[str, Any]]]:
     return histories
 
 
+def _callback_inputs(db: Database, node_name: str) -> list[dict[str, Any]]:
+    """The inputs of every `node_name` call of the second contact."""
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT input_json FROM agent_traces WHERE run_id = ? AND artifact_id = ? "
+            "AND node_name = ?",
+            (h.RUN_ID, f"{TICKET_UID}:r02", node_name),
+        ).fetchall()
+    return [json.loads(r["input_json"]) for r in rows]
+
+
 def test_capped_first_call_is_not_reported_as_an_agreed_next_step(tmp_path: Path) -> None:
     rounds = RoundsConfig(proportions={2: 1.0}, callback_reasons={"follow_up": 1.0})
     turns = [
@@ -237,6 +248,20 @@ def test_capped_first_call_is_not_reported_as_an_agreed_next_step(tmp_path: Path
     assert second["resolved"]
     for history in _callback_histories(db):
         assert [c["ended"] for c in history] == ["cap_hit"]
+    # Nothing was agreed, so the callback reports no test result, and the check
+    # planned for the capped call moves into the callback instead of counting as done.
+    [opening] = _callback_inputs(db, "incoming_request_generator")
+    assert opening["agreed_test"] is None
+    for agent in _callback_inputs(db, "agent_turn_generator"):
+        assert (agent["guide"]["done_steps"], agent["guide"]["beat_steps"]) == ([], [1, 2])
+
+
+def test_agreed_test_opens_the_callback_and_counts_as_done(tmp_path: Path) -> None:
+    db = _follow_up_then_resolved(tmp_path)
+    [opening] = _callback_inputs(db, "incoming_request_generator")
+    assert opening["agreed_test"]["finding"] == "the display flickers when the plug moves"
+    for agent in _callback_inputs(db, "agent_turn_generator"):
+        assert (agent["guide"]["done_steps"], agent["guide"]["beat_steps"]) == ([1], [2])
 
 
 def test_unhappy_hang_up_is_not_reported_as_an_agreed_next_step(tmp_path: Path) -> None:

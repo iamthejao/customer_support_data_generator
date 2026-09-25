@@ -98,7 +98,13 @@ from csfd.calls import (
     scripted_greeting,
 )
 from csfd.case_plan import CasePlanEntry
-from csfd.diagnosis import DiagnosisPlan, agent_guide, customer_findings, plan_beats
+from csfd.diagnosis import (
+    ContactBeat,
+    DiagnosisPlan,
+    agent_guide,
+    customer_findings,
+    plan_beats,
+)
 from csfd.facts import (
     CaseFacts,
     crm_view,
@@ -248,9 +254,23 @@ def _fact_issues(state: PipelineState) -> list[str]:
     return [i.explanation for i in verdict.issues if i.rule_violated == _CASE_FACTS_RULE]
 
 
-def _done_checks(slot: _PlanSlot, sequence: int) -> list[int]:
-    """Plan checks already run in the case's earlier contacts."""
-    return [i for r in slot.rounds if r.sequence < sequence and r.beat for i in r.beat.checks]
+def _contact_beat(
+    state: PipelineState, slot: _PlanSlot, rnd: _RoundSpec
+) -> tuple[ContactBeat | None, list[int]]:
+    """This contact's beat and the plan checks already run, from how earlier contacts ended.
+
+    An earlier contact's checks count as run only if it ended with its agreed
+    next step; otherwise (cut off, capped, broken off) they move into this contact.
+    """
+    if rnd.beat is None:
+        return None, []
+    ended = {c.sequence: _ended_label(c) for c in state.case_history}
+    done: list[int] = []
+    carried: list[int] = []
+    for r in slot.rounds:
+        if r.sequence < rnd.sequence and r.beat:
+            (done if ended.get(r.sequence) == "follow_up" else carried).extend(r.beat.checks)
+    return rnd.beat.model_copy(update={"checks": [*carried, *rnd.beat.checks]}), done
 
 
 def _planned_contact(slot: _PlanSlot, rnd: _RoundSpec) -> dict[str, Any] | None:
@@ -266,12 +286,16 @@ def _planned_contact(slot: _PlanSlot, rnd: _RoundSpec) -> dict[str, Any] | None:
 
 
 def _agreed_test(
-    plan: DiagnosisPlan | None, slot: _PlanSlot, rnd: _RoundSpec
+    state: PipelineState, plan: DiagnosisPlan | None, slot: _PlanSlot, rnd: _RoundSpec
 ) -> dict[str, str] | None:
-    """The check the customer agreed to run after the previous contact, with its result."""
+    """The check the customer agreed to run after the previous contact, with its result.
+
+    None unless the previous contact really ended with that agreement.
+    """
     previous = [r for r in slot.rounds if r.sequence == rnd.sequence - 1]
     beat = previous[0].beat if previous else None
-    if plan is None or beat is None or beat.next_check is None:
+    agreed = bool(state.case_history) and _ended_label(state.case_history[-1]) == "follow_up"
+    if plan is None or beat is None or beat.next_check is None or not agreed:
         return None
     check = plan.checks[beat.next_check]
     return {"how_to_check": check.how_to_check, "finding": check.finding}
@@ -286,7 +310,7 @@ def _customer_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
     problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
     rnd = _current_round(state, slot)
     plan = _diagnosis_plan(problem)
-    done = _done_checks(slot, rnd.sequence)
+    beat, done = _contact_beat(state, slot, rnd)
     return {
         "company_name": state.company.name,
         "ticket_type": slot.ticket_type.value,
@@ -299,10 +323,8 @@ def _customer_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
         "facts": customer_view(slot.facts) if slot.facts else None,
         "fact_issues": _fact_issues(state),
         "turn_cap": _effective_turn_cap(state),
-        "diagnosis": (
-            customer_findings(plan, rnd.beat, done_checks=done) if plan and rnd.beat else None
-        ),
-        "agreed_test": _agreed_test(plan, slot, rnd),
+        "diagnosis": customer_findings(plan, beat, done_checks=done) if plan and beat else None,
+        "agreed_test": _agreed_test(state, plan, slot, rnd),
         "planned": _planned_contact(slot, rnd),
         **_round_inputs(state, rnd),
     }
@@ -312,21 +334,17 @@ def _agent_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
     """Service-view inputs: a troubleshooting guide, the CRM record, the planned beat.
 
     The agent is not told the root cause. It gets the problem's diagnosis plan as
-    a guide (candidate causes in a neutral order, checks without their results;
-    resolution steps only on a contact planned to reach the cause) and has to
-    get there through the customer's answers.
+    a guide (every candidate cause with its fix, in a neutral order, and the
+    checks without their results) and has to get there through the customer's
+    answers.
     """
     problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
     rnd = _current_round(state, slot)
     plan = _diagnosis_plan(problem)
+    beat, done = _contact_beat(state, slot, rnd)
     guide = (
-        agent_guide(
-            plan,
-            rnd.beat,
-            done_checks=_done_checks(slot, rnd.sequence),
-            seed_label=f"{state.run_seed}:{slot.problem_id}",
-        )
-        if plan and rnd.beat
+        agent_guide(plan, beat, done_checks=done, seed_label=f"{state.run_seed}:{slot.problem_id}")
+        if plan and beat
         else None
     )
     return {
@@ -676,18 +694,19 @@ _OUTCOME_RULE = "planned_outcome"
 
 
 def _checker_diagnosis(
-    problem: ProblemRecord, slot: _PlanSlot, rnd: _RoundSpec
+    state: PipelineState, problem: ProblemRecord, slot: _PlanSlot, rnd: _RoundSpec
 ) -> dict[str, Any] | None:
     """The full plan plus this contact's beat, for the consistency check."""
     plan = _diagnosis_plan(problem)
-    if plan is None or rnd.beat is None:
+    beat, done = _contact_beat(state, slot, rnd)
+    if plan is None or beat is None:
         return None
     return {
         "plan": plan.model_dump(mode="json"),
         "confirming_step": plan.confirming_index() + 1,
-        "done_steps": [i + 1 for i in _done_checks(slot, rnd.sequence)],
-        "beat_steps": [i + 1 for i in rnd.beat.checks],
-        "next_step": rnd.beat.next_check + 1 if rnd.beat.next_check is not None else None,
+        "done_steps": [i + 1 for i in done],
+        "beat_steps": [i + 1 for i in beat.checks],
+        "next_step": beat.next_check + 1 if beat.next_check is not None else None,
     }
 
 
@@ -741,7 +760,7 @@ async def validate_conversation_node(
             "resolution_hint": problem.resolution_hints.get(slot.ticket_type.value, ""),
         },
         "facts": slot.facts.model_dump() if slot.facts else None,
-        "diagnosis": _checker_diagnosis(problem, slot, rnd),
+        "diagnosis": _checker_diagnosis(state, problem, slot, rnd),
         "planned": _planned_contact(slot, rnd),
         "candidate": draft.model_dump(),
         **_round_inputs(state, rnd),

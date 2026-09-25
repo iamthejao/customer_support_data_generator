@@ -16,7 +16,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 
 from csfd.agents.factory import AgentFactory
-from csfd.diagnosis import DiagnosisPlan, DiagnosticCheck
+from csfd.diagnosis import CandidateCause, DiagnosisPlan, DiagnosticCheck
 from csfd.graph.pipeline_graph import PipelineState
 from csfd.models.fake import FakeChatModel
 from csfd.prompts.registry import PromptRegistry
@@ -44,7 +44,27 @@ RUN_ID = "test-run"
 
 # The harness problem's ground truth: two checks, the second confirms the cause.
 DIAGNOSIS_PLAN = DiagnosisPlan(
-    candidate_causes=["loose PSU connector", "failing PSU", "mains brownout"],
+    candidate_causes=[
+        CandidateCause(
+            cause="loose PSU connector",
+            is_root_cause=True,
+            resolution_steps=["Reseat the PSU connector until it clicks"],
+            parts=["PSU cable"],
+            verification="Run the unit for an hour",
+            verification_finding="no restarts in an hour",
+        ),
+        CandidateCause(
+            cause="failing PSU",
+            resolution_steps=["Replace the PSU module"],
+            parts=["PSU module"],
+            verification="Run the unit for an hour",
+        ),
+        CandidateCause(
+            cause="mains brownout",
+            resolution_steps=["Move the unit to a UPS-backed socket"],
+            workaround="Run the unit from a portable UPS",
+        ),
+    ],
     checks=[
         DiagnosticCheck(
             check="Mains check",
@@ -60,10 +80,6 @@ DIAGNOSIS_PLAN = DiagnosisPlan(
             confirms_cause=True,
         ),
     ],
-    resolution_steps=["Reseat the PSU connector until it clicks"],
-    verification="Run the unit for an hour",
-    verification_finding="no restarts in an hour",
-    parts=["PSU cable"],
 )
 
 

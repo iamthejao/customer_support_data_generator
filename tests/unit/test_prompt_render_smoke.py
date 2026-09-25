@@ -17,6 +17,7 @@ from typing import get_args
 import pytest
 
 from csfd.diagnosis import (
+    CandidateCause,
     ContactBeat,
     DiagnosisPlan,
     DiagnosticCheck,
@@ -131,7 +132,27 @@ def test_customer_turn_renders_history(registry: PromptRegistry) -> None:
 
 
 _PLAN = DiagnosisPlan(
-    candidate_causes=["loose PSU connector", "failing PSU", "mains brownout"],
+    candidate_causes=[
+        CandidateCause(
+            cause="loose PSU connector",
+            is_root_cause=True,
+            resolution_steps=["Reseat the PSU connector until it clicks"],
+            parts=[],
+            verification="Run the unit for an hour",
+            verification_finding="no restarts in an hour",
+        ),
+        CandidateCause(
+            cause="failing PSU",
+            resolution_steps=["Replace the PSU module"],
+            parts=["PSU module"],
+            verification="Run the unit for an hour",
+        ),
+        CandidateCause(
+            cause="mains brownout",
+            resolution_steps=["Move the unit to a UPS-backed socket"],
+            workaround="Run the unit from a portable UPS",
+        ),
+    ],
     checks=[
         DiagnosticCheck(
             check="Mains check",
@@ -147,9 +168,6 @@ _PLAN = DiagnosisPlan(
             confirms_cause=True,
         ),
     ],
-    resolution_steps=["Reseat the PSU connector until it clicks"],
-    verification="Run the unit for an hour",
-    verification_finding="no restarts in an hour",
 )
 
 
@@ -187,7 +205,10 @@ def test_agent_turn_renders_the_guide_not_the_root_cause(registry: PromptRegistr
     )
     assert "Wiggle the PSU plug at the back of the unit" in early
     assert "the display flickers" not in early  # the customer's finding, not the agent's
-    assert "Reseat the PSU connector" not in early  # no fix before the cause is reached
+    # Every candidate cause comes with its fix, so a fix does not mark the true cause.
+    for fix in ("Reseat the PSU connector", "Replace the PSU module", "UPS-backed socket"):
+        assert fix in early
+    assert "A workaround that keeps the customer working meanwhile: Run the unit" in early
     assert "Work through check 1 of the guide" in early
     assert "runs check 2 (Connector check)" in early
     final = handle.template.render(

@@ -17,6 +17,7 @@ from csfd.seeds.company import CompanyProfile
 from csfd.seeds.scenarios import Scenario, ScenarioCatalogue
 from csfd.settings import AppSettings, Channel
 from csfd.storage.db import Database
+from csfd.storage.exporters import export_run_to_jsonl
 from csfd.storage.migrations.runner import apply_migrations
 from csfd.storage.repository import ProblemRepo, RunRepo
 from csfd.ticket_types.definitions import TicketType
@@ -130,6 +131,11 @@ def test_problems_from_reuses_problems_in_another_channel(tmp_path: Path) -> Non
     assert [r["problem_id"] for r in lineage] == [parent_problems[1]]
     assert phase1_calls == 0
     assert channels == {"phone"}
+    # The reused problem is the ground truth of the child's case: it is counted and exported.
+    assert json.loads(run.stats_json or "{}")["problem_count"] == 1
+    export_run_to_jsonl(db, child, out_dir=tmp_path / "exports")
+    exported = (tmp_path / "exports" / child / "problems.jsonl").read_text().splitlines()
+    assert [json.loads(line)["id"] for line in exported] == [parent_problems[1]]
 
 
 def test_cli_plan_loading_checks_problem_pins(tmp_path: Path) -> None:

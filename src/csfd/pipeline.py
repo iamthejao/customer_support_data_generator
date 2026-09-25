@@ -40,6 +40,7 @@ from csfd.seeds.company import CompanyProfile
 from csfd.seeds.scenarios import ScenarioCatalogue
 from csfd.settings import AppSettings
 from csfd.storage.db import Database
+from csfd.storage.exporters import run_scope
 from csfd.storage.repository import ProblemRepo
 from csfd.ticket_types.definitions import CustomerImpact, FaultDomain, ProblemComplexity
 from csfd.utils.rng import largest_remainder
@@ -69,8 +70,8 @@ class ProblemBrainstormOutput(BaseModel):
     customer_impact: CustomerImpact = CustomerImpact.DEGRADED
     tags: list[str] = Field(default_factory=list)
     resolution_hints: dict[str, str] = Field(default_factory=dict)
-    # The canonical diagnosis (checks with their findings, resolution, verification;
-    # see csfd.diagnosis) and the case outcomes this problem can plausibly end in.
+    # The canonical diagnosis (candidate causes with their fixes, checks with their
+    # findings; see csfd.diagnosis) and the case outcomes this problem can plausibly end in.
     diagnosis_plan: DiagnosisPlan = Field(default_factory=DiagnosisPlan)
     viable_outcomes: list[ProblemState] = Field(default_factory=list)
 
@@ -115,10 +116,20 @@ class ResolutionOutput(BaseModel):
         return [c for t in self.turns for c in t.commitments]
 
 
+class EditedTurn(BaseModel):
+    """A turn as the consistency check returns it; omitted `commitments` keep the original's."""
+
+    speaker: Literal["customer", "agent"]
+    content: str
+    done: bool = False
+    done_reason: str | None = None
+    commitments: list[Commitment] | None = None
+
+
 class ConsistencyVerdict(BaseModel):
     status: Literal["pass", "pass_with_edits", "fail"]
     issues: list[str] = Field(default_factory=list)
-    edited_turns: list[DialogueTurnOutput] | None = None
+    edited_turns: list[EditedTurn] | None = None
     edited_subject: str | None = None
     edited_body: str | None = None
     # The state the conversation actually leaves the problem in, judged from the text.
@@ -146,15 +157,19 @@ def _assemble_resolution(
 
 
 def _carry_commitments(
-    original: list[DialogueTurnOutput], edited: list[DialogueTurnOutput]
+    original: list[DialogueTurnOutput], edited: list[EditedTurn]
 ) -> list[DialogueTurnOutput]:
-    """Keep each turn's recorded commitments when an edit returns the turn without them."""
+    """Keep each turn's recorded commitments when an edit omits them; an explicit list wins."""
     out: list[DialogueTurnOutput] = []
     for i, turn in enumerate(edited):
-        before = original[i] if i < len(original) else None
-        if not turn.commitments and before is not None and before.speaker == turn.speaker:
-            turn = turn.model_copy(update={"commitments": before.commitments})
-        out.append(turn)
+        commitments = turn.commitments
+        if commitments is None:
+            before = original[i] if i < len(original) else None
+            same = before is not None and before.speaker == turn.speaker
+            commitments = before.commitments if before is not None and same else []
+        out.append(
+            DialogueTurnOutput(**turn.model_dump(exclude={"commitments"}), commitments=commitments)
+        )
     return out
 
 
@@ -224,7 +239,7 @@ def _compute_run_stats(
         with db.connect() as conn:
             rows = conn.execute(
                 f"SELECT {group_col} AS k, COUNT(*) AS n FROM {table} "
-                f"WHERE run_id = ? {extra_where} GROUP BY {group_col} ORDER BY {group_col}",
+                f"WHERE {run_scope(table)} {extra_where} GROUP BY {group_col} ORDER BY {group_col}",
                 (run_id,),
             ).fetchall()
         return {str(r["k"] or none_label): int(r["n"]) for r in rows}
@@ -232,7 +247,7 @@ def _compute_run_stats(
     with db.connect() as conn:
         problem_count = int(
             conn.execute(
-                "SELECT COUNT(*) AS n FROM problems WHERE run_id = ?",
+                f"SELECT COUNT(*) AS n FROM problems WHERE {run_scope('problems')}",
                 (run_id,),
             ).fetchone()["n"]
         )
@@ -297,7 +312,7 @@ async def _acompute_run_stats(
         async with adb.connect() as conn:
             cur = await conn.execute(
                 f"SELECT {group_col} AS k, COUNT(*) AS n FROM {table} "
-                f"WHERE run_id = ? {extra_where} GROUP BY {group_col} ORDER BY {group_col}",
+                f"WHERE {run_scope(table)} {extra_where} GROUP BY {group_col} ORDER BY {group_col}",
                 (run_id,),
             )
             rows = await cur.fetchall()
@@ -306,7 +321,7 @@ async def _acompute_run_stats(
     async def _count(table: str) -> int:
         async with adb.connect() as conn:
             cur = await conn.execute(
-                f"SELECT COUNT(*) AS n FROM {table} WHERE run_id = ?",
+                f"SELECT COUNT(*) AS n FROM {table} WHERE {run_scope(table)}",
                 (run_id,),
             )
             row = await cur.fetchone()

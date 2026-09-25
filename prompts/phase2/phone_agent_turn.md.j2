@@ -23,32 +23,28 @@ Pick up where the case left off: don't re-ask for details already given (a quick
 {%- endif %}
 {%- if inputs.guide %}
 
-Troubleshooting guide from the knowledge base for what this customer reports. It lists the causes you would weigh and the checks that tell them apart. You do NOT know which cause applies to this customer: find out by asking them to run the checks and listening to what they report. Never name or assume a cause before the customer has reported the result of the check that points to it.
-- Possible causes (in no particular order):
-{% for c in inputs.guide.candidate_causes %}  - {{ c }}
+Troubleshooting guide from the knowledge base for what this caller reports. It lists the causes you would weigh, the fix for each, and the checks that tell them apart. You do NOT know which cause applies to this caller: find out by asking them to run the checks and listening to what they report. Never name or assume a cause, or start its fix, before the caller has reported the result of the check that points to it.
+- Possible causes (in no particular order), each with its fix:
+{% for c in inputs.guide.candidate_causes %}  - {{ c.cause }}
+    - Fix: {{ c.resolution_steps | join(' / ') }}
+{%- if c.parts %}
+    - Parts it needs: {{ c.parts | join('; ') }}
+{%- endif %}
+{%- if c.verification %}
+    - How to confirm the fix worked: {{ c.verification }}
+{%- endif %}
+{%- if c.workaround %}
+    - A workaround that keeps the caller working meanwhile: {{ c.workaround }}
+{%- endif %}
+{%- if c.preventive_action %}
+    - Prevention advice: {{ c.preventive_action }}
+{%- endif %}
 {% endfor -%}
 - Checks, in the order to run them:
 {% for c in inputs.guide.checks %}  {{ c.step }}. {{ c.check }}: {{ c.how_to_check }}{% if c.step in inputs.guide.done_steps %} (already done in an earlier contact; see the case history){% endif %}
 {% endfor -%}
 {%- if inputs.guide.safety %}
 - Safety notes to give when relevant: {{ inputs.guide.safety | join('; ') }}
-{%- endif %}
-{%- if inputs.guide.resolution_steps %}
-- The fix, once the checks have confirmed the cause:
-{% for r in inputs.guide.resolution_steps %}  - {{ r }}
-{% endfor -%}
-{%- if inputs.guide.parts %}
-- Parts it needs: {{ inputs.guide.parts | join('; ') }}
-{%- endif %}
-{%- if inputs.guide.verification %}
-- How to confirm the fix worked: {{ inputs.guide.verification }}
-{%- endif %}
-{%- if inputs.guide.preventive_action %}
-- Prevention advice: {{ inputs.guide.preventive_action }}
-{%- endif %}
-{%- endif %}
-{%- if inputs.guide.workaround %}
-- A workaround that keeps the customer working meanwhile: {{ inputs.guide.workaround }}
 {%- endif %}
 {%- endif %}
 {%- if inputs.planned %}
@@ -64,21 +60,21 @@ Plan for this contact (follow it; the customer does not know it):
 {%- elif not inputs.planned.final %}
 - Do not name a cause as confirmed and do not declare anything fixed.{% if inputs.guide and inputs.guide.next_step %} Then agree that the customer runs check {{ inputs.guide.next_step }} ({{ inputs.guide.checks[inputs.guide.next_step - 1].check }}) in their own time and gets back to you with the result.{% else %} Then agree one concrete next step that needs time (a test the customer runs, monitoring the machine).{% endif %} Once it is agreed, end the contact with `done=true` and `done_reason="follow_up"`.
 {%- elif inputs.planned.problem_state == "fixed_verified" %}
-- When the checks confirm the cause, walk the customer through the fix, then have them confirm it works. Once they confirm, close with `done=true` and `done_reason="resolved"`.
+- When the checks confirm a cause, walk the customer through the guide's fix for that cause, then have them confirm it works. Once they confirm, close with `done=true` and `done_reason="resolved"`.
 {%- elif inputs.planned.problem_state == "fixed_unverified" %}
-- When the checks confirm the cause, walk the customer through the fix. Its effect cannot be confirmed during this contact (it needs time or a production run): agree how the customer will confirm it, don't claim it is proven, and close with `done=true` and `done_reason="customer_satisfied"`.
+- When the checks confirm a cause, walk the customer through the guide's fix for that cause. Its effect cannot be confirmed during this contact (it needs time or a production run): agree how the customer will confirm it, don't claim it is proven, and close with `done=true` and `done_reason="customer_satisfied"`.
 {%- elif inputs.planned.problem_state == "workaround" %}
-- When the checks confirm the cause, the permanent fix cannot be done right now. Give the workaround so the customer can keep working, say clearly that the cause is not removed yet and what happens next, and close with `done=true` and `done_reason="customer_satisfied"`. Don't say the problem is fixed.
+- When the checks confirm a cause, its permanent fix cannot be done right now. Give the guide's workaround for that cause so the customer can keep working, say clearly that the cause is not removed yet and what happens next, and close with `done=true` and `done_reason="customer_satisfied"`. Don't say the problem is fixed.
 {%- elif inputs.planned.problem_state == "pending_visit" %}
-- When the checks confirm the cause, the fix needs a technician on site: book the visit (who and when), tell the customer what to do until then, and close with `done=true` and `done_reason="follow_up"`. Don't say the problem is fixed.
+- When the checks confirm a cause, its fix cannot be completed in this contact: book a technician visit to carry it out (who and when), tell the customer what to do until then, and close with `done=true` and `done_reason="follow_up"`. Don't say the problem is fixed.
 {%- elif inputs.planned.problem_state == "pending_part" %}
-- When the checks confirm the cause, the fix needs a part: arrange it (what, and when it arrives), explain how it gets fitted, and close with `done=true` and `done_reason="follow_up"`. Don't say the problem is fixed.
+- When the checks confirm a cause, its fix cannot be completed in this contact: arrange the part the guide lists for it (what, and when it arrives), explain how it gets fitted, and close with `done=true` and `done_reason="follow_up"`. Don't say the problem is fixed.
 {%- elif inputs.planned.problem_state == "pending_customer_test" %}
 - Do not name a cause as confirmed.{% if inputs.guide and inputs.guide.next_step %} After your checks, agree that the customer runs check {{ inputs.guide.next_step }} ({{ inputs.guide.checks[inputs.guide.next_step - 1].check }}) in their own time and reports back.{% else %} Agree a test the customer runs in their own time and reports back.{% endif %} Close with `done=true` and `done_reason="follow_up"`.
 {%- elif inputs.planned.problem_state == "escalated_open" %}
-- The checks do not settle it at your level: after running them, escalate to the next support tier or engineering, tell the customer who will contact them and when, and close with `done=true` and `done_reason="escalation"`. Don't present any cause as confirmed or the problem as fixed.
+- After this contact's checks, escalate to the next support tier or engineering, tell the customer who will contact them and when, and close with `done=true` and `done_reason="escalation"`. Don't present any cause as confirmed or the problem as fixed.
 {%- elif inputs.planned.problem_state == "not_a_fault" %}
-- The checks will show the machine works as designed: once they do, explain what is really going on (handling, settings or expectations) and how to avoid it, then close with `done=true` and `done_reason="customer_satisfied"`.
+- When the checks confirm a cause, walk the customer through the guide's steps and prevention advice for that cause, then close with `done=true` and `done_reason="customer_satisfied"`.
 {%- elif inputs.planned.problem_state == "abandoned" %}
 - Keep diagnosing patiently, one check at a time. The customer may lose patience before you get to the cause; if they give up, acknowledge it politely and leave the door open, but leave ending the contact to them (keep `done=false`). Never claim a cause or a fix you have not reached.
 {%- endif %}

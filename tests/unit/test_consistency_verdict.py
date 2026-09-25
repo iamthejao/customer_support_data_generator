@@ -6,9 +6,14 @@ from csfd.outcomes import Commitment, ProblemState
 from csfd.pipeline import (
     ConsistencyVerdict,
     DialogueTurnOutput,
+    EditedTurn,
     ResolutionOutput,
     _apply_consistency_edits,
 )
+
+
+def _edited(turns: list[DialogueTurnOutput]) -> list[EditedTurn]:
+    return [EditedTurn(**t.model_dump()) for t in turns]
 
 
 def _draft() -> ResolutionOutput:
@@ -41,7 +46,7 @@ def test_pass_with_edits_replaces_provided_fields() -> None:
         status="pass_with_edits",
         edited_subject="new subj",
         edited_body="edited body",
-        edited_turns=new_turns,
+        edited_turns=_edited(new_turns),
     )
     out = _apply_consistency_edits(draft, verdict)
     assert out.subject == "new subj"
@@ -70,7 +75,7 @@ def test_appended_closing_turn_moves_end_reason_to_last_speaker() -> None:
         ),
     ]
     out = _apply_consistency_edits(
-        draft, ConsistencyVerdict(status="pass_with_edits", edited_turns=edited)
+        draft, ConsistencyVerdict(status="pass_with_edits", edited_turns=_edited(edited))
     )
     assert out.end_reason == "agent_done"
     assert out.resolved is True
@@ -80,7 +85,7 @@ def test_edits_keep_cap_and_drop_end_reasons() -> None:
     for reason in ("cap_hit", "dropped"):
         draft = _draft().model_copy(update={"end_reason": reason, "problem_state": None})
         out = _apply_consistency_edits(
-            draft, ConsistencyVerdict(status="pass_with_edits", edited_turns=draft.turns)
+            draft, ConsistencyVerdict(status="pass_with_edits", edited_turns=_edited(draft.turns))
         )
         assert out.end_reason == reason
         assert out.resolved is False
@@ -96,12 +101,27 @@ def test_reported_problem_state_replaces_the_planned_one() -> None:
     assert out.turns == draft.turns
 
 
-def test_edits_keep_recorded_commitments() -> None:
+def test_edits_that_omit_commitments_keep_the_recorded_ones() -> None:
     promise = Commitment(who="agent", what="book a technician", due="tomorrow")
     draft = _draft()
     draft.turns[1] = draft.turns[1].model_copy(update={"commitments": [promise]})
-    edited = [t.model_copy(update={"commitments": []}) for t in draft.turns]
+    edited = [EditedTurn(**t.model_dump(exclude={"commitments"})) for t in draft.turns]
     out = _apply_consistency_edits(
         draft, ConsistencyVerdict(status="pass_with_edits", edited_turns=edited)
     )
     assert out.turns[1].commitments == [promise]
+
+
+def test_edits_can_clear_a_false_commitment() -> None:
+    promise = Commitment(who="field technician", what="visit the site", due="tomorrow")
+    draft = _draft()
+    draft.turns[1] = draft.turns[1].model_copy(update={"commitments": [promise]})
+    verdict = ConsistencyVerdict.model_validate(
+        {
+            "status": "pass_with_edits",
+            "edited_turns": [t.model_dump() | {"commitments": []} for t in draft.turns],
+        }
+    )
+    out = _apply_consistency_edits(draft, verdict)
+    assert out.turns[1].commitments == []
+    assert out.commitments == []

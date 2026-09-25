@@ -17,7 +17,7 @@ from langchain_core.language_models import BaseChatModel
 
 from csfd.agents.base import Issue, Verdict
 from csfd.agents.factory import AgentFactory
-from csfd.diagnosis import DiagnosisPlan, DiagnosticCheck
+from csfd.diagnosis import CandidateCause, DiagnosisPlan, DiagnosticCheck
 from csfd.models.fake import FakeChatModel
 from csfd.outcomes import ProblemState
 from csfd.pipeline import (
@@ -70,7 +70,16 @@ def _canned_problem(
             "l3": "Investigate identity provider misconfiguration.",
         },
         diagnosis_plan=DiagnosisPlan(
-            candidate_causes=["expired session token", "locked account"],
+            candidate_causes=[
+                CandidateCause(
+                    cause="expired session token",
+                    is_root_cause=True,
+                    resolution_steps=["Clear the browser session and sign in again"],
+                ),
+                CandidateCause(
+                    cause="locked account", resolution_steps=["Unlock the account in the portal"]
+                ),
+            ],
             checks=[
                 DiagnosticCheck(
                     check="Error message",
@@ -80,7 +89,6 @@ def _canned_problem(
                     confirms_cause=True,
                 )
             ],
-            resolution_steps=["Clear the browser session and sign in again"],
         ),
         viable_outcomes=[ProblemState.FIXED_VERIFIED, ProblemState.PENDING_VISIT],
     )
