@@ -51,7 +51,7 @@ Support agents will NOT be told the root cause. They get a troubleshooting guide
 - `diagnosis_plan.checks`: 1–5 checks in the order a good agent runs them (cheap and safe first). Each has:
   - `check`: a short name ("Vacuum self-test");
   - `how_to_check`: what the agent asks the customer to do, read out or look at, in the customer's terms (a menu path, a reading, a visual inspection);
-  - `finding`: what the customer actually observes on THIS problem — concrete and customer-observable (a value, a message, what they see). Never name the cause in a finding;
+  - `finding`: what the customer actually observes on THIS problem when they run the check — concrete and customer-observable (a value, a message, what they see). Never name the cause in a finding, and never restate a symptom: `symptoms` are what the customer notices unprompted, findings are what they only learn by doing the check;
   - `rules_out`: which `candidate_causes` this finding eliminates (verbatim strings; may be empty);
   - `confirms_cause`: true on exactly one check — the one whose finding pins down the root cause. Checks after it are allowed only if they are part of confirming it.
   A `simple` problem needs 1–2 checks (for a documentation request, e.g. confirming the model, serial number and manual revision); `medium` 2–4; `complex` 3–5 with at least one finding that rules out the obvious first hypothesis.
