@@ -6,7 +6,8 @@
 --   * problems            — Problem Database rows (Phase 1 output)
 --   * incoming_requests    — denormalized self-contained customer requests (Phase 2)
 --   * resolutions          — multi-turn agent/customer back-and-forth, one per request
---   * lineage              — explicit (problem -> request -> resolution) traceability
+--   * lineage              — explicit (problem -> request -> resolution) traceability,
+--                            plus the case's seeded facts (asset, site, caller role)
 --   * agent_traces         — per-agent-call observability records
 --   * problem_embeddings   — per-problem embedding for commit-time dedup in Phase 1
 --
@@ -116,7 +117,8 @@ CREATE TABLE IF NOT EXISTS lineage (
     customer_tone        TEXT NOT NULL,
     incoming_request_id  INTEGER REFERENCES incoming_requests(id),
     resolution_id        INTEGER REFERENCES resolutions(id),
-    created_at            TIMESTAMP NOT NULL
+    created_at            TIMESTAMP NOT NULL,
+    case_facts_json      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_lineage_run ON lineage(run_id);
 CREATE INDEX IF NOT EXISTS idx_lineage_problem ON lineage(problem_id);

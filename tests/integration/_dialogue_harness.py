@@ -126,11 +126,11 @@ def seed_run(db: Database) -> None:
     )
 
 
-def initial_state(settings: AppSettings) -> PipelineState:
+def initial_state(settings: AppSettings, company: CompanyProfile | None = None) -> PipelineState:
     return PipelineState(
         run_id=RUN_ID,
         run_seed=settings.pipeline.run_seed or 0,
-        company=CompanyProfile(name="Acme", raw_markdown="# Acme", sections={}),
+        company=company or CompanyProfile(name="Acme", raw_markdown="# Acme", sections={}),
         scenarios=ScenarioCatalogue(
             scenarios=[Scenario(category="cooling", title="x", summary="x")],
             source_path=Path("seeds/scenarios_seed.md"),

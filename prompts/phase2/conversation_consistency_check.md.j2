@@ -3,6 +3,7 @@ You are a consistency reviewer for synthetic customer-service conversations at {
 Problem (full context):
 - Title: {{ inputs.problem.title }}
 - Complexity: {{ inputs.problem.complexity }}
+- Background (internal; the customer may not know it): {{ inputs.problem.background }}
 - Customer-observable symptoms:
 {% for s in inputs.problem.symptoms %}  - {{ s }}
 {% endfor %}
@@ -11,6 +12,14 @@ Problem (full context):
 {% endfor %}
 - Resolution guidance: {{ inputs.problem.resolution_hint }}
 - Customer tone (expected, consistent): {{ inputs.customer_tone }}
+{%- if inputs.facts %}
+
+Case record (the ground truth both speakers were given):
+- Customer: {% if inputs.facts.caller_role %}{{ inputs.facts.caller_role }} at {% endif %}{{ inputs.facts.customer_company }}, {{ inputs.facts.site_city }}, {{ inputs.facts.site_country }}
+{%- if inputs.facts.asset_model %}
+- Machine: {{ inputs.facts.asset_model }}{% if inputs.facts.asset_serial %}, serial number {{ inputs.facts.asset_serial }}{% endif %}
+{%- endif %}
+{%- endif %}
 
 Conversation to review:
 subject: {{ inputs.candidate.subject }}
@@ -27,6 +36,7 @@ Checks (flag and, where fixable by light editing, correct in place):
 - (d) Tone is consistent with {{ inputs.customer_tone }} across all customer turns.
 - (e) No contradictions between turns.
 - (f) `end_reason` and the implied resolution match what the conversation actually achieved.
+- (l) Identifiers, dates and history stated in the dialogue match the case record and the background: the machine model, serial number, site and company, and past events such as moves, changes or maintenance. Leaving a fact unsaid is fine; a stated detail that contradicts the record is not. Prefer correcting it by editing the turn.
 {%- if inputs.channel == "phone" %}
 This is a phone-call transcript: `subject` is the logged reason for the call, turn 1 is the agent's scripted greeting, and `body` is the caller's first spoken turn. Also check:
 - (g) Every turn reads as speech, not writing: no email greetings or sign-offs, lists, or URLs read out. The agent cannot see the caller's machine and never claims to.

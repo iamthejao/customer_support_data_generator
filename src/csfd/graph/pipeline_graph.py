@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from csfd.agents.base import Verdict
 from csfd.agents.factory import AgentFactory
+from csfd.facts import CaseFacts
 from csfd.models.registry import build_llm
 from csfd.pipeline import (
     DialogueTurnOutput,
@@ -82,6 +83,8 @@ class _PlanSlot(BaseModel):
     tone: str
     # One entry per contact of this case (see csfd.rounds.plan_case_rounds).
     rounds: list[_RoundSpec] = Field(default_factory=list)
+    # The case's seeded ground-truth facts (see csfd.facts); None for a hand-built slot.
+    facts: CaseFacts | None = None
 
 
 class _PriorContact(BaseModel):

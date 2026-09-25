@@ -176,3 +176,22 @@ def test_case_rounds_columns_default_to_single_contact(tmp_db_path: Path) -> Non
         ).fetchone()
     assert (req["case_uid"], req["round_index"]) == (None, 1)
     assert tuple(res) == (None, 1, 1, "email")
+
+
+def test_lineage_stores_case_facts(tmp_db_path: Path) -> None:
+    db = Database(path=tmp_db_path)
+    apply_migrations(db)
+    with db.connect() as conn:
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(lineage)").fetchall()}
+    assert "case_facts_json" in cols
+
+
+def test_stale_database_gets_a_recreate_error(tmp_db_path: Path) -> None:
+    from csfd.storage.migrations.runner import StaleSchemaError
+
+    db = Database(path=tmp_db_path)
+    apply_migrations(db)
+    with sqlite3.connect(tmp_db_path) as raw:
+        raw.execute("ALTER TABLE lineage DROP COLUMN case_facts_json")
+    with pytest.raises(StaleSchemaError, match=r"lineage\.case_facts_json.*csfd db-migrate"):
+        apply_migrations(db)

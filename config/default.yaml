@@ -89,6 +89,10 @@ storage:
   sqlite_path: "data/runs.sqlite"
   exports_dir: "data/exports"
   exports_format: ["jsonl", "parquet"]
+  # Text layout of `csfd export --format transcripts` (CLI: --speaker-style, --header-style).
+  transcripts:
+    speaker_style: upper   # upper (AGENT:) | title (Agent:) | role (Agent: / Caller (<job role>):)
+    header_style: csfd     # csfd (full key: value header) | wissant (call_id/call_date + ---) | none
 
 embedding:
   enabled: true
