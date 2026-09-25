@@ -246,7 +246,7 @@ A single `csfd generate` invocation walks the parent graph from top to bottom. E
 
 8. **Outer Phase 1 loop.** If more target complexities remain in the list, the graph routes back to `generate_problem`; otherwise Phase 1 exits and the parent graph hands the now-populated Problem Database to Phase 2.
 
-9. **Build the allocation plan.** Phase 2 starts with `build_allocation_plan`, which is the deterministic core of the system: before any Phase 2 LLM call, `csfd.allocator.build_allocation_plan` reads `tickets.total` plus the type / tier / tone proportions and produces the full list of slots. Each slot is a fixed tuple `(slot_index, problem_id, ticket_type, customer_tier, customer_tone, customer_name)`. The same seed and config always produce the same slot list. This node also pre-records `lineage` rows so each slot is traceable even before its request and resolution exist.
+9. **Build the allocation plan.** Phase 2 starts with `build_allocation_plan`, which is the deterministic core of the system: before any Phase 2 LLM call, `csfd.allocator.build_allocation_plan` reads `tickets.total` plus the type / tier / tone proportions and produces the full list of slots. Each slot is a fixed tuple `(slot_index, problem_id, ticket_type, customer_tier, customer_tone, customer_name)`. The same seed and config always produce the same slot list. This node also draws each slot's [case facts](#case-facts) and pre-records `lineage` rows (with those facts) so each slot is traceable even before its request and resolution exist.
 
 10. **Run the turn-based dialogue for a slot.** `generate_incoming_request` makes the customer's opening LLM call (symptoms + persona + the case facts a customer knows) and seeds turn 1. Then `generate_agent_turn` and `generate_customer_turn` alternate — one LLM call each, each writing an `agent_traces` row — with the customer agent seeing only customer-observable fields and the service agent seeing only root-cause fields. The loop ends when whichever speaker just spoke flags `done`, or when `dialogue.turn_cap` is hit (committed with a `warning:turn_cap_hit` flag).
 
@@ -296,11 +296,11 @@ A run uses one format; a mixed email and phone run is not supported yet. The dia
 data/exports/<run_id>/transcripts/
   cases.jsonl              # one line per case: metadata + utterances (start_s/end_s or sent_at)
   case_000001/
-    case.json              # case metadata: problem_id, tier, tone, per-contact timing and outcome
+    case.json              # case metadata: problem_id, tier, tone, case_facts, per-contact timing and outcome
     call_01.txt            # the transcript (email_01.txt on the email channel)
 ```
 
-Each transcript file is a `key: value` header, a blank line, then the conversation. A call transcript has one line per utterance (`--no-timestamps` drops the `[HH:MM:SS]` prefixes). The two samples below are real output from small `claude_code_cli` runs with two contacts per case, each showing the second contact (the email bodies are shortened with `[…]`).
+By default each transcript file is a `key: value` header, a blank line, then the conversation (see the style options below). A call transcript has one line per utterance (`--no-timestamps` drops the `[HH:MM:SS]` prefixes). The two samples below are real output from small `claude_code_cli` runs with two contacts per case, each showing the second contact (the email bodies are shortened with `[…]`).
 
 ```text
 CALL TRANSCRIPT
