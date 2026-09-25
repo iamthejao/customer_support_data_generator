@@ -32,8 +32,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from csfd.agents.base import Verdict
 from csfd.agents.factory import AgentFactory
+from csfd.diagnosis import ContactBeat
 from csfd.facts import CaseFacts
 from csfd.models.registry import build_llm
+from csfd.outcomes import ProblemState
 from csfd.pipeline import (
     DialogueTurnOutput,
     EndReason,
@@ -71,6 +73,9 @@ class _RoundSpec(BaseModel):
     started_at: datetime | None = None
     end_mode: Literal["final", "follow_up", "dropped"] = "final"
     drop_after_turns: int | None = None
+    # What this contact is planned to get through (see csfd.diagnosis.plan_beats);
+    # None for a hand-built slot.
+    beat: ContactBeat | None = None
 
 
 class _PlanSlot(BaseModel):
@@ -85,6 +90,8 @@ class _PlanSlot(BaseModel):
     rounds: list[_RoundSpec] = Field(default_factory=list)
     # The case's seeded ground-truth facts (see csfd.facts); None for a hand-built slot.
     facts: CaseFacts | None = None
+    # The state the case is planned to end in (see csfd.outcomes); None for a hand-built slot.
+    problem_state: ProblemState | None = None
 
 
 class _PriorContact(BaseModel):

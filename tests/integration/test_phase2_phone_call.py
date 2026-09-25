@@ -11,6 +11,7 @@ from pathlib import Path
 from csfd.agents.factory import AgentFactory
 from csfd.graph.phase2_graph import build_phase2_subgraph
 from csfd.models.fake import FakeChatModel
+from csfd.outcomes import ProblemState
 from csfd.pipeline import (
     ConsistencyVerdict,
     DialogueTurnOutput,
@@ -29,7 +30,9 @@ def _factory() -> AgentFactory:
                 subject="Unit power-cycles every 20 minutes",
                 body="Hi, um, yeah, our unit keeps power-cycling about every twenty minutes.",
             ),
-            ConsistencyVerdict: ConsistencyVerdict(status="pass"),
+            ConsistencyVerdict: ConsistencyVerdict(
+                status="pass", problem_state=ProblemState.FIXED_VERIFIED
+            ),
         },
         structured_seq={
             DialogueTurnOutput: [

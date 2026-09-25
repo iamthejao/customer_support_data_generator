@@ -268,6 +268,8 @@ async def commit_problem_node(
         fault_domain=str(draft.fault_domain),
         customer_impact=str(draft.customer_impact),
         tags=list(draft.tags),
+        diagnosis_plan=draft.diagnosis_plan.model_dump(mode="json"),
+        viable_outcomes=[str(o) for o in dict.fromkeys(draft.viable_outcomes)],
     )
     await ProblemRepo(db).acreate(adb, record)
 

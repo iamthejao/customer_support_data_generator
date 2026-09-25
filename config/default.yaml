@@ -58,6 +58,19 @@ tickets:
     l1:           { neutral: 0.5, frustrated: 0.3, polite: 0.2 }
     l2:           { frustrated: 0.5, urgent: 0.3, neutral: 0.2 }
     l3:           { urgent: 0.4, frustrated: 0.4, neutral: 0.2 }
+  # The state each case is planned to end in, drawn within the outcomes its problem
+  # allows (Phase 1's viable_outcomes); the consistency check verifies the dialogue
+  # reached it. `resolved` is derived: true only for fixed_*.
+  outcome_proportions:
+    fixed_verified:        0.35   # fixed, and the customer confirmed it works
+    fixed_unverified:      0.15   # fix applied, confirmation still to come
+    workaround:            0.10   # customer can work, cause not removed
+    pending_visit:         0.10   # technician visit booked
+    pending_part:          0.10   # spare or swap unit on its way
+    pending_customer_test: 0.05   # customer runs a check and reports back
+    escalated_open:        0.05   # handed to a higher tier, still open
+    not_a_fault:           0.05   # works as designed (handling, settings, expectations)
+    abandoned:             0.05   # customer gave up before it was solved
   # Conversation / output format (CLI: --channel):
   #   email — written tickets (subject + body, then written replies)
   #   phone — spoken call transcripts: scripted agent greeting, verification,

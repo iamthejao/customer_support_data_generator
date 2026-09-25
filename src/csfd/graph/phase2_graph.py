@@ -89,6 +89,7 @@ from csfd.calls import (
     estimate_turn_timings,
     scripted_greeting,
 )
+from csfd.diagnosis import DiagnosisPlan, agent_guide, customer_findings, plan_beats
 from csfd.facts import (
     CaseFacts,
     crm_view,
@@ -97,6 +98,11 @@ from csfd.facts import (
     identifier_mismatches,
 )
 from csfd.graph.pipeline_graph import PipelineState, _PlanSlot, _PriorContact, _RoundSpec
+from csfd.outcomes import (
+    ContactEnding,
+    plan_problem_states,
+    planned_ending,
+)
 from csfd.pipeline import (
     ConsistencyVerdict,
     DialogueTurnOutput,
@@ -233,9 +239,45 @@ def _fact_issues(state: PipelineState) -> list[str]:
     return [i.explanation for i in verdict.issues if i.rule_violated == _CASE_FACTS_RULE]
 
 
+def _done_checks(slot: _PlanSlot, sequence: int) -> list[int]:
+    """Plan checks already run in the case's earlier contacts."""
+    return [i for r in slot.rounds if r.sequence < sequence and r.beat for i in r.beat.checks]
+
+
+def _planned_contact(slot: _PlanSlot, rnd: _RoundSpec) -> dict[str, Any] | None:
+    """How this contact is planned to end: the state it leaves the case in and the ending."""
+    if rnd.beat is None:
+        return None
+    return {
+        "problem_state": rnd.beat.problem_state,
+        "ending": planned_ending(rnd.beat.problem_state, rnd.end_mode),
+        "cause_confirmed": rnd.beat.cause_confirmed,
+        "final": rnd.sequence == rnd.count,
+    }
+
+
+def _agreed_test(
+    plan: DiagnosisPlan | None, slot: _PlanSlot, rnd: _RoundSpec
+) -> dict[str, str] | None:
+    """The check the customer agreed to run after the previous contact, with its result."""
+    previous = [r for r in slot.rounds if r.sequence == rnd.sequence - 1]
+    beat = previous[0].beat if previous else None
+    if plan is None or beat is None or beat.next_check is None:
+        return None
+    check = plan.checks[beat.next_check]
+    return {"how_to_check": check.how_to_check, "finding": check.finding}
+
+
 def _customer_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
-    """Customer-view inputs: symptoms + impact + persona + own facts only. No root cause."""
+    """Customer-view inputs: symptoms, impact, persona, own facts and check findings.
+
+    No root cause: the customer only knows what they find when asked to do each
+    check of this contact's beat (and what they did in earlier contacts).
+    """
     problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
+    rnd = _current_round(state, slot)
+    plan = _diagnosis_plan(problem)
+    done = _done_checks(slot, rnd.sequence)
     return {
         "company_name": state.company.name,
         "ticket_type": slot.ticket_type.value,
@@ -248,27 +290,42 @@ def _customer_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
         "facts": customer_view(slot.facts) if slot.facts else None,
         "fact_issues": _fact_issues(state),
         "turn_cap": _effective_turn_cap(state),
-        **_round_inputs(state, _current_round(state, slot)),
+        "diagnosis": (
+            customer_findings(plan, rnd.beat, done_checks=done) if plan and rnd.beat else None
+        ),
+        "agreed_test": _agreed_test(plan, slot, rnd),
+        "planned": _planned_contact(slot, rnd),
+        **_round_inputs(state, rnd),
     }
 
 
 def _agent_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
-    """Service-view inputs: root cause + diagnostic context. No symptoms list, no tone."""
+    """Service-view inputs: a troubleshooting guide, the CRM record, the planned beat.
+
+    The agent is not told the root cause. It gets the problem's diagnosis plan as
+    a guide (candidate causes in a neutral order, checks without their results;
+    resolution steps only on a contact planned to reach the cause) and has to
+    get there through the customer's answers.
+    """
     problem = {p.id: p for p in state.problems_committed}[slot.problem_id]
     rnd = _current_round(state, slot)
+    plan = _diagnosis_plan(problem)
+    guide = (
+        agent_guide(
+            plan,
+            rnd.beat,
+            done_checks=_done_checks(slot, rnd.sequence),
+            seed_label=f"{state.run_seed}:{slot.problem_id}",
+        )
+        if plan and rnd.beat
+        else None
+    )
     return {
         "company_name": state.company.name,
         "ticket_type": slot.ticket_type.value,
         "agent_name": _agent_name(slot),
-        "problem": {
-            "title": problem.title,
-            "summary": problem.summary,
-            "background": problem.background,
-            "category": problem.category,
-            "fault_domain": problem.fault_domain,
-            "root_cause": problem.root_cause,
-            "resolution_hint": problem.resolution_hints.get(slot.ticket_type.value, ""),
-        },
+        "guide": guide,
+        "planned": _planned_contact(slot, rnd),
         "facts": crm_view(slot.facts) if slot.facts else None,
         "turn_cap": _effective_turn_cap(state),
         **_round_inputs(state, rnd),
@@ -280,6 +337,29 @@ def _problem_text(problem: ProblemRecord) -> str:
     return "\n".join(
         [problem.title, problem.summary, problem.background, *problem.symptoms, *problem.root_cause]
     )
+
+
+def _diagnosis_plan(problem: ProblemRecord) -> DiagnosisPlan | None:
+    """The problem's canonical diagnosis plan; None for a problem written without one."""
+    return DiagnosisPlan.model_validate(problem.diagnosis_plan) if problem.diagnosis_plan else None
+
+
+def _case_plan(slot: _PlanSlot) -> dict[str, Any]:
+    """The case's planned course, stored with its lineage as part of the ground truth."""
+    return {
+        "problem_state": slot.problem_state,
+        "contacts": [
+            {
+                "sequence": r.sequence,
+                "end_mode": r.end_mode,
+                "planned_ending": planned_ending(
+                    r.beat.problem_state if r.beat else None, r.end_mode
+                ),
+                **(r.beat.model_dump(mode="json") if r.beat else {}),
+            }
+            for r in slot.rounds
+        ],
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -320,9 +400,56 @@ async def build_allocation_plan_node(
         )
         for s in plan.slots
     }
+    states = plan_problem_states(
+        [s.index for s in plan.slots],
+        {s.index: problems_by_id[s.problem_id].viable_outcomes for s in plan.slots},
+        {str(k): w for k, w in tickets_cfg.outcome_proportions.items()},
+        seed=seed,
+    )
+    round_counts = assign_round_counts(
+        [s.index for s in plan.slots], tickets_cfg.rounds.proportions, seed=seed
+    )
+    pydantic_slots: list[_PlanSlot] = []
+    for s in plan.slots:
+        specs = plan_case_rounds(
+            slot_index=s.index,
+            round_count=round_counts[s.index],
+            rounds=tickets_cfg.rounds,
+            calendar=tickets_cfg.calendar,
+            seed=seed,
+            opening_turns=2 if tickets_cfg.channel == "phone" else 1,
+            turn_cap=tickets_cfg.dialogue.turn_cap,
+        )
+        beats = plan_beats(
+            _diagnosis_plan(problems_by_id[s.problem_id]),
+            [r.end_mode for r in specs],
+            states[s.index],
+        )
+        pydantic_slots.append(
+            _PlanSlot(
+                index=s.index,
+                problem_id=s.problem_id,
+                ticket_type=s.ticket_type,
+                tier=s.tier,
+                tone=s.tone,
+                rounds=[
+                    _RoundSpec(
+                        sequence=r.sequence,
+                        count=r.count,
+                        started_at=r.started_at,
+                        end_mode=r.end_mode,
+                        drop_after_turns=r.drop_after_turns,
+                        beat=beat,
+                    )
+                    for r, beat in zip(specs, beats, strict=True)
+                ],
+                facts=facts[s.index],
+                problem_state=states[s.index],
+            )
+        )
 
     lineage_repo = LineageRepo(db)
-    for slot in plan.slots:
+    for slot in pydantic_slots:
         await lineage_repo.acreate(
             adb,
             LineageRecord(
@@ -337,41 +464,10 @@ async def build_allocation_plan_node(
                 resolution_id=None,
                 created_at=datetime.now(UTC),
                 case_facts=facts[slot.index].model_dump(),
+                problem_state=str(slot.problem_state) if slot.problem_state else None,
+                case_plan=_case_plan(slot),
             ),
         )
-
-    round_counts = assign_round_counts(
-        [s.index for s in plan.slots], tickets_cfg.rounds.proportions, seed=seed
-    )
-    pydantic_slots = [
-        _PlanSlot(
-            index=s.index,
-            problem_id=s.problem_id,
-            ticket_type=s.ticket_type,
-            tier=s.tier,
-            tone=s.tone,
-            rounds=[
-                _RoundSpec(
-                    sequence=r.sequence,
-                    count=r.count,
-                    started_at=r.started_at,
-                    end_mode=r.end_mode,
-                    drop_after_turns=r.drop_after_turns,
-                )
-                for r in plan_case_rounds(
-                    slot_index=s.index,
-                    round_count=round_counts[s.index],
-                    rounds=tickets_cfg.rounds,
-                    calendar=tickets_cfg.calendar,
-                    seed=seed,
-                    opening_turns=2 if tickets_cfg.channel == "phone" else 1,
-                    turn_cap=tickets_cfg.dialogue.turn_cap,
-                )
-            ],
-            facts=facts[s.index],
-        )
-        for s in plan.slots
-    ]
     return {
         "plan_slots": pydantic_slots,
         "slot_index": 0,
@@ -539,6 +635,47 @@ async def generate_customer_turn_node(
     )
 
 
+# Issues from the code-level outcome check: the dialogue did not reach the
+# contact's planned problem state or ending.
+_OUTCOME_RULE = "planned_outcome"
+
+
+def _checker_diagnosis(
+    problem: ProblemRecord, slot: _PlanSlot, rnd: _RoundSpec
+) -> dict[str, Any] | None:
+    """The full plan plus this contact's beat, for the consistency check."""
+    plan = _diagnosis_plan(problem)
+    if plan is None or rnd.beat is None:
+        return None
+    return {
+        "plan": plan.model_dump(mode="json"),
+        "confirming_step": plan.confirming_index() + 1,
+        "done_steps": [i + 1 for i in _done_checks(slot, rnd.sequence)],
+        "beat_steps": [i + 1 for i in rnd.beat.checks],
+        "next_step": rnd.beat.next_check + 1 if rnd.beat.next_check is not None else None,
+    }
+
+
+def _outcome_issues(draft: ResolutionOutput, rnd: _RoundSpec) -> list[str]:
+    """Where the checked dialogue departs from the contact's planned state and ending."""
+    # A capped contact is committed with its own warning flag rather than re-rolled.
+    if rnd.beat is None or draft.end_reason == "cap_hit":
+        return []
+    issues: list[str] = []
+    planned_state = rnd.beat.problem_state
+    if planned_state is not None and draft.problem_state != planned_state:
+        issues.append(
+            f"The contact must leave the problem {planned_state.value!r}, but the dialogue "
+            f"leaves it {draft.problem_state.value if draft.problem_state else 'undetermined'!r}."
+        )
+    expected = planned_ending(planned_state, rnd.end_mode)
+    # A cap hit is already flagged as a warning; it is not a planned-outcome failure.
+    if draft.contact_ending not in (expected, ContactEnding.CAP_HIT):
+        got = draft.contact_ending.value if draft.contact_ending else "unknown"
+        issues.append(f"The contact must end {expected.value!r}, but it ends {got!r}.")
+    return issues
+
+
 async def validate_conversation_node(
     state: PipelineState,
     *,
@@ -569,6 +706,8 @@ async def validate_conversation_node(
             "resolution_hint": problem.resolution_hints.get(slot.ticket_type.value, ""),
         },
         "facts": slot.facts.model_dump() if slot.facts else None,
+        "diagnosis": _checker_diagnosis(problem, slot, rnd),
+        "planned": _planned_contact(slot, rnd),
         "candidate": draft.model_dump(),
         **_round_inputs(state, rnd),
     }
@@ -606,7 +745,9 @@ async def validate_conversation_node(
         if slot.facts
         else []
     )
-    passed = llm_passed and not mismatches
+    # The contact must leave the case in its planned state and end the planned way.
+    outcome_issues = _outcome_issues(final_draft, rnd) if llm_passed else []
+    passed = llm_passed and not mismatches and not outcome_issues
     edited = passed and verdict.status == "pass_with_edits"
     quality_flag = state.last_quality_flag
     # An edited transcript is flagged unless a turn-cap-hit already claimed the
@@ -621,7 +762,11 @@ async def validate_conversation_node(
         if passed
         else [
             Issue(severity="error", location="conversation", rule_violated=rule, explanation=msg)
-            for rule, msgs in (("consistency", llm_issues), (_CASE_FACTS_RULE, mismatches))
+            for rule, msgs in (
+                ("consistency", llm_issues),
+                (_CASE_FACTS_RULE, mismatches),
+                (_OUTCOME_RULE, outcome_issues),
+            )
             for msg in msgs
         ]
     )
@@ -750,6 +895,15 @@ async def commit_dialogue_node(
             # speaker can still claim done, and an exhausted-retry commit keeps that
             # draft, so the rule is enforced here instead of trusted to the model.
             resolved=draft.resolved and rnd.sequence == rnd.count,
+            problem_state=str(draft.problem_state) if draft.problem_state else None,
+            planned_problem_state=(
+                str(rnd.beat.problem_state) if rnd.beat and rnd.beat.problem_state else None
+            ),
+            contact_ending=str(draft.contact_ending) if draft.contact_ending else None,
+            planned_contact_ending=(
+                str(planned_ending(rnd.beat.problem_state, rnd.end_mode)) if rnd.beat else None
+            ),
+            commitments=[c.model_dump() for c in draft.commitments],
             quality_flag=state.last_quality_flag,
             created_at=datetime.now(UTC),
             channel=channel,
@@ -816,12 +970,27 @@ async def _mark_exhausted_node(state: PipelineState) -> dict[str, Any]:
 async def _mark_validation_skipped_node(state: PipelineState) -> dict[str, Any]:
     """Stamp the validation-skipped warning when checks are disabled.
 
-    A turn-cap-hit flag takes precedence: a capped conversation that also skips
+    The contact is stored with its planned problem state (unchecked). A
+    turn-cap-hit flag takes precedence: a capped conversation that also skips
     validation should still surface the cap, the more actionable signal.
     """
     if state.last_quality_flag == "warning:turn_cap_hit":
         return {}
-    return {"last_quality_flag": "warning:validation_skipped"}
+    # Nothing judged the text, so the contact keeps its planned state, and the
+    # flag says it is unchecked.
+    update: dict[str, Any] = {"last_quality_flag": "warning:validation_skipped"}
+    draft = state.current_resolution_draft
+    slots = state.plan_slots
+    beat = (
+        _current_round(state, slots[state.slot_index]).beat
+        if state.slot_index < len(slots)
+        else None
+    )
+    if draft is not None and beat is not None:
+        update["current_resolution_draft"] = draft.model_copy(
+            update={"problem_state": beat.problem_state}
+        )
+    return update
 
 
 async def _mark_cap_hit_node(state: PipelineState) -> dict[str, Any]:

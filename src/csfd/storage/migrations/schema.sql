@@ -8,6 +8,7 @@
 --   * resolutions          — multi-turn agent/customer back-and-forth, one per request
 --   * lineage              — explicit (problem -> request -> resolution) traceability,
 --                            plus the case's seeded facts (asset, site, caller role)
+--                            and its plan (planned problem state, beats per contact)
 --   * agent_traces         — per-agent-call observability records
 --   * problem_embeddings   — per-problem embedding for commit-time dedup in Phase 1
 --
@@ -50,7 +51,12 @@ CREATE TABLE IF NOT EXISTS problems (
         CHECK (fault_domain IN ('hardware','software','configuration','process','billing','account','integration')),
     customer_impact       TEXT NOT NULL DEFAULT 'degraded'
         CHECK (customer_impact IN ('blocked','degraded','cosmetic','informational')),
-    tags_json             TEXT NOT NULL DEFAULT '[]'
+    tags_json             TEXT NOT NULL DEFAULT '[]',
+    -- csfd.diagnosis.DiagnosisPlan: candidate causes, ordered checks with the
+    -- customer's findings, resolution, verification, prevention.
+    diagnosis_plan_json   TEXT,
+    -- csfd.outcomes.ProblemState values the problem can plausibly end in.
+    viable_outcomes_json  TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS idx_problems_run ON problems(run_id);
 CREATE INDEX IF NOT EXISTS idx_problems_category ON problems(category);
@@ -100,7 +106,13 @@ CREATE TABLE IF NOT EXISTS resolutions (
     duration_s           REAL,
     case_uid             TEXT,
     round_index          INTEGER NOT NULL DEFAULT 1,
-    round_count          INTEGER NOT NULL DEFAULT 1
+    round_count          INTEGER NOT NULL DEFAULT 1,
+    -- Honest outcome (csfd.outcomes). `resolved` is derived: problem_state is fixed_*.
+    problem_state          TEXT,
+    planned_problem_state  TEXT,
+    contact_ending         TEXT,
+    planned_contact_ending TEXT,
+    commitments_json       TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS idx_resolutions_run ON resolutions(run_id);
 CREATE INDEX IF NOT EXISTS idx_resolutions_problem ON resolutions(problem_id);
@@ -118,7 +130,11 @@ CREATE TABLE IF NOT EXISTS lineage (
     incoming_request_id  INTEGER REFERENCES incoming_requests(id),
     resolution_id        INTEGER REFERENCES resolutions(id),
     created_at            TIMESTAMP NOT NULL,
-    case_facts_json      TEXT
+    case_facts_json      TEXT,
+    -- The state the case is planned to end in, and its planned course per contact
+    -- (end mode, planned ending, diagnosis beat).
+    problem_state        TEXT,
+    case_plan_json       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_lineage_run ON lineage(run_id);
 CREATE INDEX IF NOT EXISTS idx_lineage_problem ON lineage(problem_id);

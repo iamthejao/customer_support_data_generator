@@ -8,6 +8,7 @@ from pathlib import Path
 from csfd.agents.factory import AgentFactory
 from csfd.graph.phase2_graph import build_phase2_subgraph
 from csfd.models.fake import FakeChatModel
+from csfd.outcomes import ProblemState
 from csfd.pipeline import (
     ConsistencyVerdict,
     DialogueTurnOutput,
@@ -37,6 +38,7 @@ def _factory() -> AgentFactory:
                 edited_subject="Power cycling resolved",
                 edited_body="It power-cycles.",
                 edited_turns=_EDITED,
+                problem_state=ProblemState.FIXED_VERIFIED,
             ),
         },
         structured_seq={

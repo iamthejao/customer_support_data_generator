@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from csfd.graph.phase2_graph import build_phase2_subgraph
 from csfd.models.fake import FakeChatModel
+from csfd.outcomes import ProblemState
 from csfd.pipeline import ConsistencyVerdict, DialogueTurnOutput, IncomingRequestOutput
 from csfd.rounds import plan_case_rounds
 from csfd.settings import AppSettings, Channel, RoundsConfig
@@ -39,10 +40,12 @@ def _run(
     validation: bool,
     channel: Channel = "phone",
     turn_cap: int = 20,
+    verdicts: list[ConsistencyVerdict] | None = None,
 ) -> tuple[Database, AppSettings, FakeChatModel]:
     fake = FakeChatModel(
         structured={ConsistencyVerdict: ConsistencyVerdict(status="pass")},
         structured_seq={
+            ConsistencyVerdict: list(verdicts or []),
             IncomingRequestOutput: [
                 IncomingRequestOutput(subject="Unit power-cycles", body="Hi, it power-cycles."),
                 IncomingRequestOutput(
@@ -78,7 +81,12 @@ def _follow_up_then_resolved(tmp_path: Path, channel: Channel = "phone") -> Data
         _turn("agent", "Thanks for calling back. Let's replace the PSU cable then."),
         _turn("customer", "New cable is in, it's stable now. Thanks!", "customer_satisfied"),
     ]
-    db, _, _ = _run(tmp_path, rounds, turns, validation=True, channel=channel)
+    # The checker reports each call's planned state: the customer's test, then fixed.
+    verdicts = [
+        ConsistencyVerdict(status="pass", problem_state=ProblemState.PENDING_CUSTOMER_TEST),
+        ConsistencyVerdict(status="pass", problem_state=ProblemState.FIXED_VERIFIED),
+    ]
+    db, _, _ = _run(tmp_path, rounds, turns, validation=True, channel=channel, verdicts=verdicts)
     return db
 
 
@@ -333,6 +341,7 @@ def test_email_case_is_a_series_of_dated_threads(tmp_path: Path) -> None:
         "content": "Hi, it power-cycles.",
         "done": False,
         "done_reason": None,
+        "commitments": [],
         "sent_at": first["started_at"],
     }
     for row in (first, second):

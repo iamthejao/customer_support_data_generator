@@ -17,7 +17,9 @@ from langchain_core.language_models import BaseChatModel
 
 from csfd.agents.base import Issue, Verdict
 from csfd.agents.factory import AgentFactory
+from csfd.diagnosis import DiagnosisPlan, DiagnosticCheck
 from csfd.models.fake import FakeChatModel
+from csfd.outcomes import ProblemState
 from csfd.pipeline import (
     DialogueTurnOutput,
     IncomingRequestOutput,
@@ -67,6 +69,20 @@ def _canned_problem(
             "l2": "Inspect auth logs and reset session tokens.",
             "l3": "Investigate identity provider misconfiguration.",
         },
+        diagnosis_plan=DiagnosisPlan(
+            candidate_causes=["expired session token", "locked account"],
+            checks=[
+                DiagnosticCheck(
+                    check="Error message",
+                    how_to_check="Read out the message shown after signing in",
+                    finding="'session expired' appears straight away",
+                    rules_out=["locked account"],
+                    confirms_cause=True,
+                )
+            ],
+            resolution_steps=["Clear the browser session and sign in again"],
+        ),
+        viable_outcomes=[ProblemState.FIXED_VERIFIED, ProblemState.PENDING_VISIT],
     )
 
 
@@ -211,6 +227,9 @@ def test_pipeline_produces_exact_proportions(
     for p in pdb:
         counts[p.complexity] = counts.get(p.complexity, 0) + 1
     assert counts == {"simple": 2, "medium": 1, "complex": 1}
+    # Each problem keeps its diagnosis plan and viable outcomes.
+    assert all(p.diagnosis_plan and p.diagnosis_plan["checks"] for p in pdb)
+    assert all(p.viable_outcomes == ["fixed_verified", "pending_visit"] for p in pdb)
 
     # Total tickets match config.
     ir_rows = IncomingRequestRepo(db).list_for_run(run_id)
@@ -229,6 +248,15 @@ def test_pipeline_produces_exact_proportions(
     for r in ir_rows:
         tier_counts[r["customer_tier"]] = tier_counts.get(r["customer_tier"], 0) + 1
     assert tier_counts == {"standard": 6, "premium": 3, "enterprise": 1}
+
+    # Every case is planned to end in one of its problem's viable outcomes.
+    with db.connect() as conn:
+        planned = [
+            r["problem_state"]
+            for r in conn.execute("SELECT problem_state FROM lineage WHERE run_id = ?", (run_id,))
+        ]
+    assert set(planned) <= {"fixed_verified", "pending_visit"}
+    assert len(planned) == 10
 
 
 def test_pipeline_is_deterministic_across_runs(
@@ -258,10 +286,11 @@ def test_pipeline_is_deterministic_across_runs(
         )
     )
 
-    def _slot_tuples(db: Database, run_id: str) -> list[tuple[int, str, str, str, str]]:
+    def _slot_tuples(db: Database, run_id: str) -> list[tuple[int, str, str, str, str, str, str]]:
         with db.connect() as conn:
             rows = conn.execute(
-                "SELECT slot_index, problem_id, ticket_type, customer_tier, customer_tone "
+                "SELECT slot_index, problem_id, ticket_type, customer_tier, customer_tone, "
+                "problem_state, case_plan_json "
                 "FROM lineage WHERE run_id = ? ORDER BY slot_index",
                 (run_id,),
             ).fetchall()
@@ -274,6 +303,9 @@ def test_pipeline_is_deterministic_across_runs(
                 r["ticket_type"],
                 r["customer_tier"],
                 r["customer_tone"],
+                # The planned outcome and per-contact beats are part of the plan too.
+                r["problem_state"],
+                r["case_plan_json"],
             )
             for r in rows
         ]

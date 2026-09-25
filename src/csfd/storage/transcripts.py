@@ -16,7 +16,9 @@ emails (From / To / Date / Subject, body, a one-line quote of the message
 replied to) for email. Addresses use reserved ``.example`` domains. Ground
 truth (root cause, resolution hints) is deliberately not written here; join
 ``case.json``'s ``problem_id`` against ``problems.jsonl``. ``case.json`` does
-carry the case's seeded facts (machine, site, caller role; see csfd.facts).
+carry the case's seeded facts (machine, site, caller role; see csfd.facts) and
+its honest outcome: the problem state each contact left the case in, how it
+ended, and the commitments made, each next to what was planned (csfd.outcomes).
 
 Two options change the text layout for downstream parsers (defaults keep the
 format above):
@@ -48,10 +50,12 @@ from csfd.ticket_types.definitions import TICKET_TYPE_METADATA, TicketType
 _CASES_SQL = """
 SELECT l.ticket_uid, l.slot_index, l.problem_id, l.ticket_type,
        l.customer_tier, l.customer_tone, l.case_facts_json,
+       l.problem_state AS planned_case_state,
        ir.customer_name, ir.channel, ir.subject,
        res.resolution_uid, res.turns_json, res.resolved, res.quality_flag,
        res.agent_name, res.end_reason, res.started_at, res.ended_at, res.duration_s,
-       res.round_index, res.round_count
+       res.round_index, res.round_count, res.problem_state, res.planned_problem_state,
+       res.contact_ending, res.planned_contact_ending, res.commitments_json
 FROM lineage l
 JOIN resolutions res ON res.case_uid = l.ticket_uid
 JOIN incoming_requests ir ON ir.id = res.incoming_request_id
@@ -85,6 +89,11 @@ class Contact:
     quality_flag: str | None
     turns: list[dict[str, Any]]
     count: int = 1
+    problem_state: str | None = None
+    planned_problem_state: str | None = None
+    contact_ending: str | None = None
+    planned_contact_ending: str | None = None
+    commitments: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def file_name(self) -> str:
@@ -110,6 +119,7 @@ class Case:
     customer_name: str
     company_name: str | None = None
     facts: dict[str, Any] | None = None
+    planned_problem_state: str | None = None
     contacts: list[Contact] = field(default_factory=list)
 
     @property
@@ -153,6 +163,7 @@ def load_cases(db: Database, run_id: str) -> list[Case]:
                 customer_name=r["customer_name"],
                 company_name=company_name,
                 facts=json.loads(r["case_facts_json"]) if r["case_facts_json"] else None,
+                planned_problem_state=r["planned_case_state"],
             )
         case.contacts.append(
             Contact(
@@ -171,6 +182,11 @@ def load_cases(db: Database, run_id: str) -> list[Case]:
                 resolved=bool(r["resolved"]),
                 quality_flag=r["quality_flag"],
                 turns=json.loads(r["turns_json"]),
+                problem_state=r["problem_state"],
+                planned_problem_state=r["planned_problem_state"],
+                contact_ending=r["contact_ending"],
+                planned_contact_ending=r["planned_contact_ending"],
+                commitments=json.loads(r["commitments_json"] or "[]"),
             )
         )
     return list(cases.values())
@@ -360,6 +376,11 @@ def _contact_payload(case: Case, contact: Contact, *, utterances: bool) -> dict[
         "gap_since_previous_s": _gap_s(case, contact),
         "end_reason": contact.end_reason,
         "outcome": contact.outcome,
+        "contact_ending": contact.contact_ending,
+        "planned_contact_ending": contact.planned_contact_ending,
+        "problem_state": contact.problem_state,
+        "planned_problem_state": contact.planned_problem_state,
+        "commitments": contact.commitments,
         "resolved": contact.resolved,
         "quality_flag": contact.quality_flag,
         "turn_count": len(contact.turns),
@@ -392,6 +413,8 @@ def case_payload(case: Case, *, utterances: bool = False) -> dict[str, Any]:
         "channel": case.channel,
         "contact_count": len(case.contacts),
         "planned_contact_count": case.contacts[-1].count if case.contacts else 0,
+        "problem_state": final.problem_state if final else None,
+        "planned_problem_state": case.planned_problem_state,
         "resolved": final.resolved if final else False,
         "contacts": [_contact_payload(case, c, utterances=utterances) for c in case.contacts],
     }

@@ -27,6 +27,14 @@ import structlog
 from pydantic import BaseModel, Field
 
 from csfd.agents.factory import AgentFactory
+from csfd.diagnosis import DiagnosisPlan
+from csfd.outcomes import (
+    Commitment,
+    ContactEnding,
+    ProblemState,
+    is_resolved,
+    observed_ending,
+)
 from csfd.seeds.company import CompanyProfile
 from csfd.seeds.scenarios import ScenarioCatalogue
 from csfd.settings import AppSettings
@@ -59,6 +67,10 @@ class ProblemBrainstormOutput(BaseModel):
     customer_impact: CustomerImpact = CustomerImpact.DEGRADED
     tags: list[str] = Field(default_factory=list)
     resolution_hints: dict[str, str] = Field(default_factory=dict)
+    # The canonical diagnosis (checks with their findings, resolution, verification;
+    # see csfd.diagnosis) and the case outcomes this problem can plausibly end in.
+    diagnosis_plan: DiagnosisPlan = Field(default_factory=DiagnosisPlan)
+    viable_outcomes: list[ProblemState] = Field(default_factory=list)
 
 
 class DialogueTurnOutput(BaseModel):
@@ -66,6 +78,9 @@ class DialogueTurnOutput(BaseModel):
     content: str
     done: bool = False
     done_reason: str | None = None
+    # Promises made in this turn, recorded by the speaker who made them. Never
+    # rendered into the transcript; the consistency check verifies them against it.
+    commitments: list[Commitment] = Field(default_factory=list)
 
 
 class IncomingRequestOutput(BaseModel):
@@ -82,8 +97,20 @@ class ResolutionOutput(BaseModel):
     subject: str
     body: str
     turns: list[DialogueTurnOutput] = Field(default_factory=list)
-    resolved: bool = False
     end_reason: EndReason = "agent_done"
+    # The state the contact leaves the problem in (see csfd.outcomes): the planned
+    # state until the consistency check reports what the dialogue actually reached.
+    problem_state: ProblemState | None = None
+    contact_ending: ContactEnding | None = None
+
+    @property
+    def resolved(self) -> bool:
+        """Derived: the problem is fixed (verified or not)."""
+        return is_resolved(self.problem_state)
+
+    @property
+    def commitments(self) -> list[Commitment]:
+        return [c for t in self.turns for c in t.commitments]
 
 
 class ConsistencyVerdict(BaseModel):
@@ -92,16 +119,8 @@ class ConsistencyVerdict(BaseModel):
     edited_turns: list[DialogueTurnOutput] | None = None
     edited_subject: str | None = None
     edited_body: str | None = None
-
-
-RESOLVED_DONE_REASONS = frozenset({"resolved", "customer_satisfied", "issue_fixed", "closed"})
-
-
-def _derive_resolved(end_reason: str, last_done_reason: str | None) -> bool:
-    """True iff the conversation ended naturally on a resolved-style reason."""
-    if end_reason in ("cap_hit", "dropped"):
-        return False
-    return last_done_reason in RESOLVED_DONE_REASONS
+    # The state the conversation actually leaves the problem in, judged from the text.
+    problem_state: ProblemState | None = None
 
 
 def _assemble_resolution(
@@ -110,37 +129,63 @@ def _assemble_resolution(
     body: str,
     turns: list[DialogueTurnOutput],
     end_reason: EndReason,
+    problem_state: ProblemState | None = None,
 ) -> ResolutionOutput:
-    """Build a ResolutionOutput from accumulated dialogue state, deriving `resolved`."""
+    """Build a ResolutionOutput from accumulated dialogue state, deriving the contact ending."""
     last_reason = turns[-1].done_reason if turns else None
     return ResolutionOutput(
         subject=subject,
         body=body,
         turns=turns,
-        resolved=_derive_resolved(end_reason, last_reason),
         end_reason=end_reason,
+        problem_state=problem_state,
+        contact_ending=observed_ending(end_reason, last_reason),
     )
+
+
+def _carry_commitments(
+    original: list[DialogueTurnOutput], edited: list[DialogueTurnOutput]
+) -> list[DialogueTurnOutput]:
+    """Keep each turn's recorded commitments when an edit returns the turn without them."""
+    out: list[DialogueTurnOutput] = []
+    for i, turn in enumerate(edited):
+        before = original[i] if i < len(original) else None
+        if not turn.commitments and before is not None and before.speaker == turn.speaker:
+            turn = turn.model_copy(update={"commitments": before.commitments})
+        out.append(turn)
+    return out
 
 
 def _apply_consistency_edits(
     draft: ResolutionOutput, verdict: ConsistencyVerdict
 ) -> ResolutionOutput:
-    """Return the draft unchanged on pass, or a new draft with the verdict's edits applied.
+    """Return the draft with the verdict's edits and reported problem state applied.
 
-    Only fields the verdict explicitly sets are replaced; `resolved` is re-derived
-    from the (possibly edited) turns. A natural ending (`customer_done` /
+    Only fields the verdict explicitly sets are replaced; a verdict without a
+    problem state keeps the draft's. A natural ending (`customer_done` /
     `agent_done`) follows whoever speaks last in the edited turns, since the
     checker may append a closing turn; `cap_hit` / `dropped` are kept as-is.
     """
+    state = verdict.problem_state or draft.problem_state
     if verdict.status != "pass_with_edits":
-        return draft
+        return (
+            draft
+            if state == draft.problem_state
+            else draft.model_copy(update={"problem_state": state})
+        )
     subject = verdict.edited_subject if verdict.edited_subject is not None else draft.subject
     body = verdict.edited_body if verdict.edited_body is not None else draft.body
-    turns = verdict.edited_turns if verdict.edited_turns is not None else draft.turns
+    turns = (
+        _carry_commitments(draft.turns, verdict.edited_turns)
+        if verdict.edited_turns is not None
+        else draft.turns
+    )
     end_reason = draft.end_reason
     if end_reason in ("customer_done", "agent_done") and turns:
         end_reason = "customer_done" if turns[-1].speaker == "customer" else "agent_done"
-    return _assemble_resolution(subject=subject, body=body, turns=turns, end_reason=end_reason)
+    return _assemble_resolution(
+        subject=subject, body=body, turns=turns, end_reason=end_reason, problem_state=state
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -171,14 +216,16 @@ def _compute_run_stats(
     health without joining trace rows. Stored in ``runs.stats_json``.
     """
 
-    def _group_count(table: str, group_col: str, extra_where: str = "") -> dict[str, int]:
+    def _group_count(
+        table: str, group_col: str, extra_where: str = "", none_label: str = "ok"
+    ) -> dict[str, int]:
         with db.connect() as conn:
             rows = conn.execute(
                 f"SELECT {group_col} AS k, COUNT(*) AS n FROM {table} "
                 f"WHERE run_id = ? {extra_where} GROUP BY {group_col} ORDER BY {group_col}",
                 (run_id,),
             ).fetchall()
-        return {str(r["k"] or "ok"): int(r["n"]) for r in rows}
+        return {str(r["k"] or none_label): int(r["n"]) for r in rows}
 
     with db.connect() as conn:
         problem_count = int(
@@ -218,6 +265,13 @@ def _compute_run_stats(
         "tone_counts": _group_count("lineage", "customer_tone"),
         "channel_counts": _group_count("resolutions", "channel"),
         "contacts_per_case": _group_count("resolutions", "round_count", "AND round_index = 1"),
+        # Honest outcomes: the state each case ended in (its last contact) and how contacts ended.
+        "problem_state_counts": _group_count(
+            "resolutions", "problem_state", "AND round_index = round_count", "unassessed"
+        ),
+        "contact_ending_counts": _group_count(
+            "resolutions", "contact_ending", none_label="unassessed"
+        ),
         "quality_flags": {
             "problems": _group_count("problems", "quality_flag"),
             "incoming_requests": _group_count("incoming_requests", "quality_flag"),
@@ -235,7 +289,9 @@ async def _acompute_run_stats(
 ) -> dict[str, Any]:
     """Async sibling of :func:`_compute_run_stats` used inside graph nodes."""
 
-    async def _group_count(table: str, group_col: str, extra_where: str = "") -> dict[str, int]:
+    async def _group_count(
+        table: str, group_col: str, extra_where: str = "", none_label: str = "ok"
+    ) -> dict[str, int]:
         async with adb.connect() as conn:
             cur = await conn.execute(
                 f"SELECT {group_col} AS k, COUNT(*) AS n FROM {table} "
@@ -243,7 +299,7 @@ async def _acompute_run_stats(
                 (run_id,),
             )
             rows = await cur.fetchall()
-        return {str(r["k"] or "ok"): int(r["n"]) for r in rows}
+        return {str(r["k"] or none_label): int(r["n"]) for r in rows}
 
     async def _count(table: str) -> int:
         async with adb.connect() as conn:
@@ -268,6 +324,12 @@ async def _acompute_run_stats(
         "channel_counts": await _group_count("resolutions", "channel"),
         "contacts_per_case": await _group_count(
             "resolutions", "round_count", "AND round_index = 1"
+        ),
+        "problem_state_counts": await _group_count(
+            "resolutions", "problem_state", "AND round_index = round_count", "unassessed"
+        ),
+        "contact_ending_counts": await _group_count(
+            "resolutions", "contact_ending", none_label="unassessed"
         ),
         "quality_flags": {
             "problems": await _group_count("problems", "quality_flag"),

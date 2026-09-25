@@ -45,6 +45,24 @@ Produce one Problem with the following sections. The schema requires every field
 ### Solution hints (internal layer)
 - `resolution_hints`: an object whose keys are a subset of `{"docs_request","l1","l2","l3"}` and whose values are 1–2 sentence hints describing what a resolution of that type would look like for **this specific** problem. Include hints only for ticket types realistic for this complexity (e.g. omit `docs_request` for a `complex` novel issue; omit `l3` for a `simple` issue).
 
+### Diagnosis plan (internal layer — the ground truth the conversations are built on)
+Support agents will NOT be told the root cause. They get a troubleshooting guide built from this plan and must reach the cause by asking the customer to run the checks; the customer only knows each check's `finding`. So the plan must lead from the symptoms to the root cause through things a customer can do, read out or look at.
+- `diagnosis_plan.candidate_causes`: 2–4 short causes an experienced agent would weigh for these symptoms. Exactly one of them is the `root_cause` (same wording as its first bullet); the others are plausible alternatives on this product.
+- `diagnosis_plan.checks`: 1–5 checks in the order a good agent runs them (cheap and safe first). Each has:
+  - `check`: a short name ("Vacuum self-test");
+  - `how_to_check`: what the agent asks the customer to do, read out or look at, in the customer's terms (a menu path, a reading, a visual inspection);
+  - `finding`: what the customer actually observes on THIS problem — concrete and customer-observable (a value, a message, what they see). Never name the cause in a finding;
+  - `rules_out`: which `candidate_causes` this finding eliminates (verbatim strings; may be empty);
+  - `confirms_cause`: true on exactly one check — the one whose finding pins down the root cause. Checks after it are allowed only if they are part of confirming it.
+  A `simple` problem needs 1–2 checks (for a documentation request, e.g. confirming the model, serial number and manual revision); `medium` 2–4; `complex` 3–5 with at least one finding that rules out the obvious first hypothesis.
+- `diagnosis_plan.resolution_steps`: 1–5 ordered steps that remove the root cause.
+- `diagnosis_plan.verification`: how the fix is confirmed; `verification_finding`: what the customer observes once it works.
+- `diagnosis_plan.workaround`: a way to keep working while the cause is not removed ("" if none is realistic).
+- `diagnosis_plan.preventive_action`: one sentence; `parts`: spare parts the fix needs (may be empty); `safety`: safety notes the agent must give (may be empty).
+
+### Viable outcomes (internal layer)
+- `viable_outcomes`: which case outcomes this problem can realistically end in, from `fixed_verified`, `fixed_unverified`, `workaround`, `pending_visit`, `pending_part`, `pending_customer_test`, `escalated_open`, `not_a_fault`, `abandoned`. List 3–6. Include `pending_part` / `pending_visit` only if the fix needs a part or an on-site technician; `not_a_fault` only if the root cause is handling, settings or expectations rather than a defect; `workaround` only if `diagnosis_plan.workaround` is set.
+
 ## Anti-patterns (each maps to a checker rule id)
 - `complexity_mismatch` — do not set `complexity` to a value other than `{{ inputs.target_complexity }}`.
 - `category_off_topic` — do not pick a `category` that names a different subsystem than the one described in `title` and `summary`.
@@ -56,6 +74,8 @@ Produce one Problem with the following sections. The schema requires every field
 - `root_cause_missing` — `root_cause` must be non-empty and concrete; no "user error" without specifics; do not restate `symptoms`.
 - `fault_domain_mismatch` — `fault_domain` must align with the subsystem described in `title` / `category` and with the stated `root_cause`.
 - `tags_invalid` — `tags` must be 3–6 entries, lowercase, no duplicates, no sentence fragments.
+- `diagnosis_plan_invalid` — the root cause must be among `candidate_causes`; exactly one check has `confirms_cause=true` and its finding points to the root cause; findings are customer-observable and never name the cause; `rules_out` only names candidate causes and never the root cause; the resolution steps remove the root cause.
+- `viable_outcomes_invalid` — outcomes must come from the listed values and fit the problem (no `pending_part` without a part, no `not_a_fault` for a genuine defect, no `workaround` without a workaround).
 
 {% if prior_verdicts -%}
 Prior attempt failed validation. Address each issue, referencing the `rule_violated` id where given:

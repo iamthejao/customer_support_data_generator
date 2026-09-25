@@ -16,6 +16,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 
 from csfd.agents.factory import AgentFactory
+from csfd.diagnosis import DiagnosisPlan, DiagnosticCheck
 from csfd.graph.pipeline_graph import PipelineState
 from csfd.models.fake import FakeChatModel
 from csfd.prompts.registry import PromptRegistry
@@ -41,6 +42,30 @@ from csfd.storage.repository import ProblemRecord, ProblemRepo, RunRecord, RunRe
 
 RUN_ID = "test-run"
 
+# The harness problem's ground truth: two checks, the second confirms the cause.
+DIAGNOSIS_PLAN = DiagnosisPlan(
+    candidate_causes=["loose PSU connector", "failing PSU", "mains brownout"],
+    checks=[
+        DiagnosticCheck(
+            check="Mains check",
+            how_to_check="Plug a lamp into the same socket and watch it",
+            finding="the lamp stays steady",
+            rules_out=["mains brownout"],
+        ),
+        DiagnosticCheck(
+            check="Connector check",
+            how_to_check="Wiggle the PSU plug at the back of the unit",
+            finding="the display flickers when the plug moves",
+            rules_out=["failing PSU"],
+            confirms_cause=True,
+        ),
+    ],
+    resolution_steps=["Reseat the PSU connector until it clicks"],
+    verification="Run the unit for an hour",
+    verification_finding="no restarts in an hour",
+    parts=["PSU cable"],
+)
+
 
 def build_settings(
     tmp_path: Path,
@@ -50,6 +75,7 @@ def build_settings(
     turn_cap: int = 20,
     channel: Channel = "email",
     rounds: RoundsConfig | None = None,
+    outcome: str = "fixed_verified",
 ) -> AppSettings:
     return AppSettings(
         pipeline=PipelineConfig(version="test", run_seed=7, budget=BudgetConfig()),
@@ -69,6 +95,8 @@ def build_settings(
             },
             channel=channel,
             rounds=rounds or RoundsConfig(),
+            # Every case is planned to end in ``outcome``, so scripted verdicts can match it.
+            outcome_proportions={outcome: 1.0},
         ),
         validation=ValidationConfig(enabled=validation_enabled, max_retries=max_retries),
         observability=ObservabilityConfig(),
@@ -93,6 +121,8 @@ def problem() -> ProblemRecord:
         fault_domain="hardware",
         customer_impact="degraded",
         tags=[],
+        diagnosis_plan=DIAGNOSIS_PLAN.model_dump(mode="json"),
+        viable_outcomes=["fixed_verified", "pending_part", "pending_customer_test"],
     )
 
 

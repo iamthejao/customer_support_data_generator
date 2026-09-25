@@ -32,17 +32,48 @@ Contact {{ c.sequence }} — {{ c.when }}{% if c.ended == "dropped" %} (the exch
 {% endfor %}{% endfor %}
 It is now {{ inputs.round.since_previous }} since that last exchange, and the problem is not solved yet.
 {%- endif %}
+{%- if inputs.diagnosis and inputs.diagnosis.findings %}
+
+What you find when the agent asks you to do or check these things (report it in your own words, and only when asked; never volunteer a result the agent has not asked for, and don't interpret it):
+{% for f in inputs.diagnosis.findings %}- If asked to: {{ f.how_to_check }} — you find: {{ f.finding }}
+{% endfor -%}
+{%- if inputs.diagnosis.after_fix %}
+- Once the agent has walked you through the fix and you try it: {{ inputs.diagnosis.after_fix }}
+{%- endif %}
+If the agent asks you to check something not listed here, say you're not sure or describe only what you could plausibly see, without inventing a clear result.
+{%- endif %}
+{%- if inputs.planned %}
+
+How this contact ends for you (the agent does not know this):
+{%- if not inputs.planned.final and inputs.planned.ending == "dropped" %}
+- Keep going with the agent; do not end the contact or set `done=true`.
+{%- elif not inputs.planned.final or inputs.planned.problem_state in ("pending_visit", "pending_part", "pending_customer_test", "escalated_open") %}
+- It ends with an agreed next step, not a fix. Once the agent has agreed one with you (a test you run, a visit, a part, an escalation), accept it and end with `done=true` and `done_reason="follow_up"`. Don't say the problem is fixed.
+{%- elif inputs.planned.problem_state == "fixed_verified" %}
+- Stay until the agent has walked you through the fix and you have confirmed it works; then thank them and end with `done=true` and `done_reason="customer_satisfied"`.
+{%- elif inputs.planned.problem_state == "fixed_unverified" %}
+- The agent will walk you through a fix, but you can't confirm yet that it worked (it needs time or a real production run). Accept that, and end with `done=true` and `done_reason="customer_satisfied"` without claiming it definitely works.
+{%- elif inputs.planned.problem_state == "workaround" %}
+- The agent will give you a way to keep working while the real cause is dealt with later. Accept it, and end with `done=true` and `done_reason="customer_satisfied"`.
+{%- elif inputs.planned.problem_state == "not_a_fault" %}
+- The agent will explain that the machine is working as designed. Once it makes sense to you, end with `done=true` and `done_reason="customer_satisfied"`.
+{%- elif inputs.planned.problem_state == "abandoned" %}
+- You run out of patience before the problem is solved: after going along with two or three of the agent's steps, say you can't spend more time on this now, and end with `done=true` and `done_reason="customer_frustrated"`.
+{%- endif %}
+{%- endif %}
 
 Conversation so far (turn {{ inputs.turn_index }} of at most {{ inputs.turn_cap }}):
 {% for t in inputs.conversation_so_far %}{{ t.speaker }}: {{ t.content }}
 {% endfor %}
 
 How to respond:
-- Answer the agent's latest message using ONLY your symptoms, the facts about you and your machine above, and what they've told you. Don't invent technical facts you couldn't know.
+- Answer the agent's latest message using ONLY your symptoms, the facts about you and your machine above, what you find when you do the checks above, and what they've told you. Don't invent technical facts you couldn't know.
 - If the agent's question is ambiguous, it is realistic to misunderstand it or ask what they mean — this is allowed and encouraged occasionally.
 - Short conversations are correct for simple problems. If the agent's solution clearly addresses what you described, acknowledge it and set `done=true`. Don't invent extra questions.
+{%- if not inputs.planned %}
 - Set `done=true` when satisfied (`done_reason="customer_satisfied"`), when told it's fixed (`done_reason="resolved"`), or when leaving unhappy (`done_reason="customer_frustrated"`). Otherwise `done=false`.
-{%- if inputs.round %}
+{%- endif %}
+{%- if inputs.round and not inputs.planned %}
 
 This is contact {{ inputs.round.sequence }} of {{ inputs.round.count }} about this problem. Override for this contact:
 {%- if inputs.round.end_mode == "follow_up" %}
@@ -59,3 +90,4 @@ Output contract — return one turn:
 - `content`: your reply (1–6 sentences).
 - `done`: boolean (see above).
 - `done_reason`: short tag when done, else null.
+- `commitments`: promises you make in this turn, each `{who, what, due}` (`who` is "customer"; `due` as you said it, or null), e.g. running a test and reporting back. An empty list if you promise nothing. They are not shown in the transcript.

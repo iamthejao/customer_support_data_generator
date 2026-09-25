@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from csfd.outcomes import Commitment, ProblemState
 from csfd.pipeline import (
     ConsistencyVerdict,
     DialogueTurnOutput,
@@ -18,8 +19,8 @@ def _draft() -> ResolutionOutput:
             DialogueTurnOutput(speaker="customer", content="orig body", done=False),
             DialogueTurnOutput(speaker="agent", content="ok", done=True, done_reason="resolved"),
         ],
-        resolved=True,
         end_reason="agent_done",
+        problem_state=ProblemState.FIXED_VERIFIED,
     )
 
 
@@ -77,9 +78,30 @@ def test_appended_closing_turn_moves_end_reason_to_last_speaker() -> None:
 
 def test_edits_keep_cap_and_drop_end_reasons() -> None:
     for reason in ("cap_hit", "dropped"):
-        draft = _draft().model_copy(update={"end_reason": reason})
+        draft = _draft().model_copy(update={"end_reason": reason, "problem_state": None})
         out = _apply_consistency_edits(
             draft, ConsistencyVerdict(status="pass_with_edits", edited_turns=draft.turns)
         )
         assert out.end_reason == reason
         assert out.resolved is False
+
+
+def test_reported_problem_state_replaces_the_planned_one() -> None:
+    draft = _draft()
+    out = _apply_consistency_edits(
+        draft, ConsistencyVerdict(status="pass", problem_state=ProblemState.PENDING_VISIT)
+    )
+    assert out.problem_state == ProblemState.PENDING_VISIT
+    assert out.resolved is False
+    assert out.turns == draft.turns
+
+
+def test_edits_keep_recorded_commitments() -> None:
+    promise = Commitment(who="agent", what="book a technician", due="tomorrow")
+    draft = _draft()
+    draft.turns[1] = draft.turns[1].model_copy(update={"commitments": [promise]})
+    edited = [t.model_copy(update={"commitments": []}) for t in draft.turns]
+    out = _apply_consistency_edits(
+        draft, ConsistencyVerdict(status="pass_with_edits", edited_turns=edited)
+    )
+    assert out.turns[1].commitments == [promise]
