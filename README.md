@@ -17,10 +17,10 @@ The generated data is intended for practical evaluation tasks:
 
 Each run produces a benchmark-ready dataset with separate artifacts for causes, customer inputs, support outcomes, and auditability:
 
-- **`problems`** — the Phase 1 Problem Database. Each row is a synthetic root cause with title, summary, background, category, complexity, and resolution hints. Use this as the ground-truth issue pool behind the generated tickets.
+- **`problems`** — the Phase 1 Problem Database. Each row is a synthetic root cause with title, summary, background, symptoms, category, complexity, resolution hints, a canonical **diagnosis plan** (candidate causes, ordered checks with what the customer finds, resolution, verification, prevention) and the **viable outcomes** a case about it can end in. Use this as the ground-truth issue pool behind the generated tickets; see [Ground truth and honest outcomes](#ground-truth-and-honest-outcomes).
 - **`incoming_requests`** — standalone customer messages created from the allocation plan. These are the inputs a classifier, RAG system, or support agent would receive at evaluation time.
-- **`resolutions`** — full multi-turn support conversations for each incoming request. These provide expected handling behavior, turn counts, resolution status, and agent/customer dialogue for workflow regression tests.
-- **`lineage`** — the join table that links each ticket slot to its originating problem, request, and resolution. This makes evaluation slices explainable: every benchmark example can be traced back to the root cause and configured distribution slot.
+- **`resolutions`** — full multi-turn support conversations for each incoming request. These provide expected handling behavior, turn counts, and agent/customer dialogue, plus an honest outcome per contact: the `problem_state` it left the problem in, its `contact_ending`, and the `commitments` made, each next to what was planned. `resolved` is derived: true only when the problem is fixed.
+- **`lineage`** — the join table that links each ticket slot to its originating problem, request, and resolution, plus the case's seeded facts and its plan (the planned problem state and, per contact, the end mode and diagnosis beat). This makes evaluation slices explainable: every benchmark example can be traced back to the root cause and configured distribution slot.
 - **`agent_traces`** — one audit row per LLM call, including prompt version, model/provider metadata, latency, checker verdicts, and parent-child links between generation and validation. Use this to debug output quality and compare runs.
 - **`manifest.json`** — export metadata and file checksums for the generated JSONL/Parquet artifacts. Use it to pin a dataset version in downstream benchmarks.
 - **`transcripts/`** — the same conversations rendered as plain-text transcripts, one folder per case (`csfd export --format transcripts`). Depending on `tickets.channel` these are dated email threads or call transcripts with speaker labels, timestamps, and call metadata, ready to feed a pipeline that consumes call transcriptions. See [Conversation formats](#conversation-formats).
@@ -76,7 +76,7 @@ The resolved config (default + active profile) is persisted as `runs.config_snap
 
 1. **Phase 1 — Problem Database** — generate `problem_database.count` problems with target complexities driven by `complexity_proportions` (largest-remainder rounding). Each problem flows through a `generate_problem → validate_problem → commit_problem` retry sub-loop.
 2. **Allocator** — `csfd.allocator.build_allocation_plan` produces a fully deterministic plan: every ticket slot's `(problem_id, ticket_type, customer_tier, customer_tone)` is chosen before any LLM call.
-3. **Phase 2 — Resolution per slot** — for each slot, a turn-based dialogue between two information-asymmetric agents produces the conversation. A customer agent (which sees only the problem's symptoms, impact, and persona, plus the [case facts](#case-facts) a customer knows) opens with the standalone incoming request; a service agent (which sees the root cause, background, resolution hint, and the case facts a CRM shows) replies. Turns alternate — one LLM call each — until whichever speaker just spoke flags the conversation done, or a hard `dialogue.turn_cap` is reached. A consistency agent then reviews the full transcript and may pass it, pass it with edits, or fail it (a fail re-rolls the whole conversation within the same retry budget as Phase 1). Conversation length is emergent: simple problems resolve in 2–3 turns, complex ones take more. This costs more LLM calls per slot than a single-shot generator — typically ~4–10 turn calls plus one consistency call.
+3. **Phase 2 — Resolution per slot** — for each slot, a turn-based dialogue between two information-asymmetric agents produces the conversation. A customer agent (which sees only the problem's symptoms, impact, and persona, the [case facts](#case-facts) a customer knows, and what they find when asked to run each diagnostic check) opens with the standalone incoming request; a service agent replies. The service agent is **not told the root cause**: it gets a troubleshooting guide built from the problem's diagnosis plan (candidate causes, checks without results) plus the case facts a CRM shows, and reaches the cause through the customer's answers, following the contact's planned beat. Turns alternate — one LLM call each — until whichever speaker just spoke flags the conversation done, or a hard `dialogue.turn_cap` is reached. A consistency agent then reviews the full transcript and may pass it, pass it with edits, or fail it (a fail re-rolls the whole conversation within the same retry budget as Phase 1). Conversation length is emergent: simple problems resolve in 2–3 turns, complex ones take more. This costs more LLM calls per slot than a single-shot generator — typically ~4–10 turn calls plus one consistency call.
 
 Three output datasets per run: **`incoming_requests`** (denormalized customer requests), **`resolutions`** (multi-turn conversations), and **`lineage`** (problem → request → resolution traceability). Every LLM call also writes one row to **`agent_traces`** with `prompt_id`, `model_provider`, `model_id`, `latency_ms`, and (for checkers) `verdict` / `verdict_issues_json` — checker traces link to their generator via `parent_trace_id`.
 
@@ -176,17 +176,17 @@ The parent graph owns run lifecycle and durability. It creates the `runs` row, c
 
 ### Phase 1 graph — Problem Database
 
-Phase 1 turns company/scenario seeds into a reusable Problem Database. It deterministically assigns target complexities, asks the generator to produce one problem at a time, validates each candidate with the combined checker, retries on failed verdicts, and persists accepted `ProblemV2Record` rows. Its output is not a ticket yet; it is the controlled pool of root causes that Phase 2 will allocate across ticket slots. After validation passes, accepted candidates are embedded and rejected if cosine similarity to any already-committed problem in the run exceeds `embedding.threshold`; rejections re-enter the same retry sub-loop with a synthesised `near_duplicate` verdict that surfaces the matched problem's title and summary to the next generation attempt.
+Phase 1 turns company/scenario seeds into a reusable Problem Database. It deterministically assigns target complexities, asks the generator to produce one problem at a time (including its diagnosis plan and viable outcomes, which the checker validates with the `diagnosis_plan_invalid` and `viable_outcomes_invalid` rules), validates each candidate with the combined checker, retries on failed verdicts, and persists accepted `ProblemV2Record` rows. Its output is not a ticket yet; it is the controlled pool of root causes that Phase 2 will allocate across ticket slots. After validation passes, accepted candidates are embedded and rejected if cosine similarity to any already-committed problem in the run exceeds `embedding.threshold`; rejections re-enter the same retry sub-loop with a synthesised `near_duplicate` verdict that surfaces the matched problem's title and summary to the next generation attempt.
 
 ### Phase 2 graph — Requests and resolutions
 
-Phase 2 consumes the persisted Problem Database and the configured ticket proportions. It first builds the allocation plan, which fixes every slot's problem, ticket type, customer tier, and tone before generation starts, plus each slot's round plan (how many contacts the case takes and when). For each contact, it generates a standalone incoming customer request and a full turn-by-turn conversation, validates the result, persists `incoming_requests` and `resolutions`, and backfills `lineage` so every benchmark row can be traced back to its originating problem.
+Phase 2 consumes the persisted Problem Database and the configured ticket proportions. It first builds the allocation plan, which fixes every slot's problem, ticket type, customer tier, and tone before generation starts, plus each slot's round plan (how many contacts the case takes and when), its planned problem state, and each contact's diagnosis beat. For each contact, it generates a standalone incoming customer request and a full turn-by-turn conversation, validates the result, persists `incoming_requests` and `resolutions`, and backfills `lineage` so every benchmark row can be traced back to its originating problem.
 
 ```mermaid
 flowchart TB
     subgraph Seeds["Inputs"]
-        C[company_seed.md]
-        S[scenarios_seed.md]
+        C[seeds/company/company_seed.md]
+        S[seeds/company/scenarios_seed.md]
     end
     subgraph PARENT["Parent graph (csfd.graph.pipeline_graph)"]
         IR[init_run<br>git_sha, started_at, run row]
@@ -208,10 +208,10 @@ flowchart TB
         CP -->|more problems| GP
     end
     subgraph P2["Phase 2 subgraph (csfd.graph.phase2_graph)"]
-        BAP[build_allocation_plan<br>deterministic slots + round plan<br>+ pre-record lineage]
+        BAP[build_allocation_plan<br>deterministic slots + round plan<br>+ planned state and beats<br>+ pre-record lineage]
         GIR[generate_incoming_request<br>customer opening<br>phone: scripted greeting first]
-        GAT[generate_agent_turn<br>root-cause view]
-        GCT[generate_customer_turn<br>symptoms view]
+        GAT[generate_agent_turn<br>guide + beat view, no root cause]
+        GCT[generate_customer_turn<br>symptoms + findings view]
         VC[validate_conversation<br>consistency agent, optional]
         CD[commit_dialogue<br>persist contact + call timing<br>backfill lineage]
         BAP --> GIR
@@ -226,6 +226,7 @@ flowchart TB
     end
     Seeds --> IR
     IR --> P1
+    IR -->|--problems-from| P2
     P1 --> P2
     P2 --> FR
     FR --> EX[(SQLite + JSONL/Parquet + manifest.json)]
@@ -255,15 +256,15 @@ A single `csfd generate` invocation walks the parent graph from top to bottom. E
 
 8. **Outer Phase 1 loop.** If more target complexities remain in the list, the graph routes back to `generate_problem`; otherwise Phase 1 exits and the parent graph hands the now-populated Problem Database to Phase 2.
 
-9. **Build the allocation plan.** Phase 2 starts with `build_allocation_plan`, which is the deterministic core of the system: before any Phase 2 LLM call, `csfd.allocator.build_allocation_plan` reads `tickets.total` plus the type / tier / tone proportions and produces the full list of slots. Each slot is a fixed tuple `(slot_index, problem_id, ticket_type, customer_tier, customer_tone, customer_name)`. The same seed and config always produce the same slot list. This node also draws each slot's [case facts](#case-facts) and pre-records `lineage` rows (with those facts) so each slot is traceable even before its request and resolution exist.
+9. **Build the allocation plan.** Phase 2 starts with `build_allocation_plan`, which is the deterministic core of the system: before any Phase 2 LLM call, `csfd.allocator.build_allocation_plan` reads `tickets.total` plus the type / tier / tone proportions and produces the full list of slots. Each slot is a fixed tuple `(slot_index, problem_id, ticket_type, customer_tier, customer_tone, customer_name)`. The same seed and config always produce the same slot list. This node also draws each slot's [case facts](#case-facts), plans each case's final problem state within its problem's viable outcomes and splits the diagnosis plan into per-contact beats (see [Ground truth and honest outcomes](#ground-truth-and-honest-outcomes)), applies any [case plan](#case-plans-and-problem-reuse) pins, and pre-records `lineage` rows (with the facts and the plan) so each slot is traceable even before its request and resolution exist.
 
-10. **Run the turn-based dialogue for a slot.** `generate_incoming_request` makes the customer's opening LLM call (symptoms + persona + the case facts a customer knows) and seeds turn 1. Then `generate_agent_turn` and `generate_customer_turn` alternate — one LLM call each, each writing an `agent_traces` row — with the customer agent seeing only customer-observable fields and the service agent seeing only root-cause fields. The loop ends when whichever speaker just spoke flags `done`, or when `dialogue.turn_cap` is hit (committed with a `warning:turn_cap_hit` flag).
+10. **Run the turn-based dialogue for a slot.** `generate_incoming_request` makes the customer's opening LLM call (symptoms + persona + the case facts a customer knows) and seeds turn 1. Then `generate_agent_turn` and `generate_customer_turn` alternate — one LLM call each, each writing an `agent_traces` row — with the customer agent seeing only customer-observable fields (and each check's finding) and the service agent seeing a troubleshooting guide and the planned beat, never the root cause. The loop ends when whichever speaker just spoke flags `done`, or when `dialogue.turn_cap` is hit (committed with a `warning:turn_cap_hit` flag).
 
-11. **Validate the conversation.** `validate_conversation` runs the consistency agent over the full transcript, with its own trace row linked via `parent_trace_id`. It sees the problem background and the case facts, and checks that identifiers, dates and history in the dialogue match them. It returns pass, pass-with-edits (the transcript is rewritten in place and flagged `info:consistency_edited`), or fail. A code-level check then scans the resulting text for machine models and serial numbers shaped like the company catalogue's; one that differs from the case record fails the attempt too.
+11. **Validate the conversation.** `validate_conversation` runs the consistency agent over the full transcript, with its own trace row linked via `parent_trace_id`. It sees the problem background and the case facts, and checks that identifiers, dates and history in the dialogue match them. It returns pass, pass-with-edits (the transcript is rewritten in place and flagged `info:consistency_edited`), or fail. It also sees the diagnosis plan and the contact's plan, checks that the agent names a cause only after the confirming finding and that the customer's results match the plan, verifies the recorded commitments, and reports the `problem_state` the text actually reached. Code-level checks then fail the attempt when the text names a machine model or serial number that differs from the case record, or when the reported state or the contact's ending differs from the plan.
 
 12. **Retry sub-loop.** Fail + retries left → re-roll the whole conversation from `generate_incoming_request`. Retries exhausted → accept with a quality flag.
 
-13. **Commit the dialogue.** `commit_dialogue` inserts the `incoming_requests` row and the `resolutions` row (with the full turn list, the derived `resolved` flag, and per-message timing: utterance offsets for calls, sent times for emails), then backfills the pre-recorded `lineage` row with their ids. For the first contact of a case, the benchmark "gold tuple" is now complete for this slot.
+13. **Commit the dialogue.** `commit_dialogue` inserts the `incoming_requests` row and the `resolutions` row (with the full turn list and its commitments, the problem state and contact ending next to the planned ones, the derived `resolved` flag, and per-message timing: utterance offsets for calls, sent times for emails), then backfills the pre-recorded `lineage` row with their ids. For the first contact of a case, the benchmark "gold tuple" is now complete for this slot.
 
 14. **Outer Phase 2 loop.** If the case has more rounds, route back to `generate_incoming_request` for the same slot with the committed contact added to the case history. Otherwise, if more slots remain in the allocation plan, move to the next slot; when none remain, Phase 2 exits.
 
@@ -393,6 +394,57 @@ Every case gets a seeded record of facts before any dialogue is generated, so bo
 
 The customer prompts get the facts a customer knows (their job role, site, and the model and serial number on the nameplate); the agent prompts get the facts a CRM shows (account, contact role, installed machine). Neither prompt asks a speaker to make identifiers up. The consistency checker sees the record, and a code check fails any attempt whose transcript names a different catalogue-shaped model or serial number. On the re-roll, both speakers are told which identifier went wrong. The record is stored in `lineage.case_facts_json` and exported in `case.json` / `cases.jsonl`. The same `run_seed` draws the same facts. Databases created before this column existed are not upgraded (the schema is `CREATE ... IF NOT EXISTS`): `csfd db-migrate`, `csfd generate` and `csfd export` stop with an error naming the missing column, so delete or move the SQLite file (default `data/runs.sqlite`) and run `csfd db-migrate` to recreate it.
 
+## Ground truth and honest outcomes
+
+The ground truth of a case exists before its conversation, so every dialogue has lineage to a real problem with expected symptoms, root cause and solution; from a case's contacts the problem can be reconstructed partially or fully.
+
+**Diagnosis plan (Phase 1, `csfd.diagnosis`).** Each problem carries a canonical plan: 2–4 `candidate_causes` an agent would weigh (the root cause among them), 1–5 ordered `checks` (`how_to_check`, the `finding` the customer observes on this problem, which candidates it `rules_out`, and which check `confirms_cause`), then `resolution_steps`, `verification` and `verification_finding`, `workaround`, `preventive_action`, `parts` and `safety`. It also lists `viable_outcomes`, the problem states a case about it can realistically end in (`not_a_fault` only for handling problems, `pending_part` only if a part is needed, and so on).
+
+**The agent diagnoses instead of being told.** The service agent never sees the root cause, background or resolution hint. It gets a troubleshooting guide: the candidate causes in a seeded order (so the true one is not marked by position) and the checks without their results. The resolution, verification and prevention are added only on a contact planned to reach the cause. The customer gets the finding of each check planned so far and reports it only when asked. The consistency checker sees the whole plan and fails a dialogue whose agent names a cause before the confirming finding, or whose customer reports a different result.
+
+**Beats per contact.** `plan_beats` spreads the checks up to the confirming one over the case's contacts: a `follow_up` contact runs its checks and agrees the next one as the customer's own test (the next contact opens with its result); a `dropped` contact is cut off mid-diagnosis; the final contact finishes. States that stop short (`pending_customer_test`, `escalated_open`, `abandoned`) never run the confirming check.
+
+**Honest outcomes (`csfd.outcomes`).** Each case is planned, before any dialogue, to end in one `problem_state`, drawn from `tickets.outcome_proportions` (exact counts where viability allows) within its problem's viable outcomes:
+
+| `problem_state` | Meaning | Planned `contact_ending` |
+|---|---|---|
+| `fixed_verified` | fixed, and the customer confirmed it works | `customer_satisfied` |
+| `fixed_unverified` | fix applied, confirmation still to come | `customer_satisfied` |
+| `workaround` | the customer can work, the cause is not removed | `customer_satisfied` |
+| `pending_visit` / `pending_part` | a technician visit is booked / a part is on its way | `agreed_next_step` |
+| `pending_customer_test` | the customer runs a check and reports back | `agreed_next_step` |
+| `escalated_open` | handed to a higher tier, still open | `agreed_next_step` |
+| `not_a_fault` | the machine works as designed | `customer_satisfied` |
+| `abandoned` | the customer gave up before it was solved | `customer_frustrated` |
+
+Non-final contacts are planned too: a `follow_up` contact leaves the case `pending_customer_test`, a `dropped` one leaves no state (`contact_ending` `dropped`). Both speakers are told how the contact ends. The consistency checker reports the state the text actually reached; a state or ending that differs from the plan fails the attempt (re-rolled within the retry budget; on exhaustion the reached state is stored and flagged `warning:retries_exhausted`). A capped contact is stored with what the checker reports and its `warning:turn_cap_hit` flag. With validation disabled the planned state is stored, flagged `warning:validation_skipped`.
+
+Each dialogue turn also records the promises its speaker made as `commitments` (`{who, what, due}`), never rendered into the transcript and checked against the text. `resolutions` stores `problem_state`, `planned_problem_state`, `contact_ending`, `planned_contact_ending` and `commitments_json`; `lineage` stores the case's planned `problem_state` and its `case_plan_json` (per contact: end mode, planned ending, checks, agreed next check, whether the cause is reached). `resolved` is derived: true only for `fixed_*` on a case's last contact. `stats_json` adds `problem_state_counts` and `contact_ending_counts`, and `case.json` / `cases.jsonl` carry the same fields.
+
+## Case plans and problem reuse
+
+Proportions set totals per dimension; a golden case often needs one specific combination. `csfd generate --plan cases.yaml` pins cases explicitly (`csfd.case_plan`):
+
+```yaml
+cases:
+  - problem: 0                 # index into the run's problems, or a problem id (with --problems-from)
+    ticket_type: l2
+    tier: enterprise
+    tone: frustrated
+    end_modes: [follow_up]     # contacts 1..N-1; implies contacts: 2
+    problem_state: pending_visit
+  - tone: polite               # everything left out is filled from the proportions
+```
+
+The number of entries is the number of cases. The proportional allocation plan is built for that many cases first, then each entry overrides what it pins, so unpinned dimensions stay deterministic. A pinned `problem_state` wins over the problem's viable outcomes. The plan is recorded in `runs.config_snapshot_json`.
+
+`--problems-from <run_id>` reuses the committed problems (with their diagnosis plans) of an earlier run in the same database: Phase 1 is skipped, and the run is stored with `phase='phase2'` and that `parent_run_id`. The earlier run must have used the same company seed. Together they render the same problem in another channel:
+
+```bash
+csfd generate --company kalvora --problems 3 --tickets 3                   # prints <run_a>
+csfd generate --company kalvora --problems-from <run_a> --channel phone --plan cases.yaml
+```
+
 ## Multi-call cases (rounds)
 
 A downstream consumer often needs *several* contacts about the same problem, such as a caller who hangs up, tries something, and calls back. `tickets.rounds` models this without a second pipeline. Each allocation slot is a **case** (one `lineage` row, one `ticket_uid`), and a case can span N **rounds** (contacts). All rounds of a case share the problem, customer, tier, tone, and `case_uid`.
@@ -414,18 +466,18 @@ How a case plays out:
   - its start time: a log-uniform gap from `gap_hours`, moved into business hours if it falls outside them;
   - how each non-final contact ends.
 - **Non-final rounds end without closing the case:**
-  - `follow_up`: both speakers work toward a next step that needs time (a test the customer runs, a part, a technician visit) and end with `done_reason="follow_up"`.
+  - `follow_up`: both speakers work toward a next step that needs time, by default the next check of the diagnosis plan run by the customer, and end with `done_reason="follow_up"`.
   - `dropped`: the contact cuts off after a seeded number of turns. This reuses the turn-cap route with a lower per-contact cap and is recorded as `end_reason="dropped"` with no warning. A call renders it as `(call disconnected)`; on the email channel the thread just goes quiet, rendered as `(no further reply in this thread)`.
-- **The final round** is told to bring the case to a conclusion.
+- **The final round** ends the case in its planned problem state (see [Ground truth and honest outcomes](#ground-truth-and-honest-outcomes)).
 - **Continuity.** From round 2 on, both the customer and the agent prompts get the earlier contacts' transcripts: the customer remembers them, and the agent reads them as case history. The prompts also state the time since the last contact and how each earlier contact ended — an agreed next step, a dropped line, a contact that ran out of turns, an unhappy hang-up, or any other ending that did not fix the problem — so a later round never claims a next step that was never agreed. The caller refers back to the earlier call and keeps details such as the serial number. The agent picks up where the case left off. The consistency checker sees the same history and checks continuity, plus the planned ending (a follow-up round must not declare the problem fixed).
 - **Retries** re-roll only the current round. Rounds already committed are never regenerated.
 
 Storage and consumption:
 
-- Every contact is one `incoming_requests` row and one `resolutions` row, with `case_uid` (= `lineage.ticket_uid`) and `round_index`. `resolutions` also carries `round_count`. Round 1 keeps the familiar `<ticket_uid>:req/:res` uids, and later rounds add `:rNN`. Only the final contact of a case can be stored `resolved = true`; every earlier contact is committed unresolved whatever the dialogue claimed, so the flag never contradicts the fact that the case continues.
+- Every contact is one `incoming_requests` row and one `resolutions` row, with `case_uid` (= `lineage.ticket_uid`) and `round_index`. `resolutions` also carries `round_count`. Round 1 keeps the familiar `<ticket_uid>:req/:res` uids, and later rounds add `:rNN`. Only the final contact of a case can be stored `resolved = true` (and only in a `fixed_*` state); every earlier contact is committed unresolved whatever the dialogue claimed, so the flag never contradicts the fact that the case continues.
 - `lineage` stays one row per case and links to **round 1**. The gold-tuple join below therefore yields each case's first contact. Join `resolutions.case_uid = lineage.ticket_uid` for all of them.
 - `runs.stats_json` counts types, tiers, and tones per case, and adds `contacts_per_case` and `channel_counts`.
-- The transcript export groups a case's contacts into one folder (`call_01.txt` … `call_NN.txt`). `case.json` lists each contact's timing, `gap_since_previous_s`, `end_reason`, `outcome`, and `resolved`. Feed a whole folder to a consumer that builds one report from many calls.
+- The transcript export groups a case's contacts into one folder (`call_01.txt` … `call_NN.txt`). `case.json` lists each contact's timing, `gap_since_previous_s`, `end_reason`, `outcome`, `problem_state`, `contact_ending`, `commitments` (each next to its planned value), and `resolved`. Feed a whole folder to a consumer that builds one report from many calls.
 
 ```sql
 -- every contact of every case, in order
@@ -457,7 +509,7 @@ Every run stamps:
 - `run_seed` — drives the `uniform` allocator's tiebreaker shuffle; the `complexity_weighted` strategy splits each ticket type's slots across its non-empty preferred complexity buckets via fixed rank weights, so it is reproducible without a seed
 - `pipeline.version` — semver bumped on schema-breaking changes
 - `git_sha` — captured at run start via `git rev-parse HEAD` (NULL outside a git repo)
-- `config_snapshot_json` — the resolved `problem_database` + `tickets` + `validation` + `embedding` sections, plus the seed company's name
+- `config_snapshot_json` — the resolved `problem_database` + `tickets` + `validation` + `embedding` sections, the seed company's name and slug, the case plan (if any) and the `--problems-from` run (if any)
 - `stats_json` — end-of-run counts (problems, requests, resolutions, traces) plus type/tier/tone/complexity breakdowns and quality-flag distribution
 - `prompt_id` — sha256-prefix hash of the **prompt template source** (the Jinja file contents, not the per-call rendered prompt — so the id is a stable handle that changes only when a template is edited), recorded on every row in `agent_traces.prompt_id`. Each LLM call also records `model_provider`, `model_id`, `attempt`, `latency_ms`, and (for checker calls) `verdict` and `verdict_issues_json`. Token usage (`tokens_in`, `tokens_out`) is populated from LangChain's `usage_metadata` for any provider that emits it (Anthropic, OpenAI-compatible); `FakeChatModel` and the Claude and Codex CLI wrappers leave them NULL.
 
@@ -469,6 +521,7 @@ Contact metadata follows the same rule. Several values come from `(run_seed, slo
 
 - the number of contacts per case;
 - each contact's `started_at`, agent name, and planned ending (including where a dropped call cuts off);
+- each case's planned problem state and each contact's diagnosis beat (which checks it covers);
 - the phone channel's scripted greeting. Per-utterance timestamps, `ended_at`, and `duration_s` are derived deterministically from the generated text, so they vary only when the text does.
 
 Embedding scores depend on the Ollama model/version and platform: a candidate whose cosine is very close to `embedding.threshold` can flip across Ollama upgrades. The deterministic allocation guarantee (slot-by-slot lineage) is unchanged.
@@ -484,7 +537,8 @@ SELECT p.id AS problem_id,
        p.title, p.summary, p.complexity, p.category,
        l.slot_index, l.customer_tier, l.customer_tone,
        ir.request_uid, ir.subject, ir.body,
-       res.resolution_uid, res.turns_json, res.turn_count, res.resolved
+       res.resolution_uid, res.turns_json, res.turn_count, res.resolved,
+       res.problem_state, res.contact_ending, res.commitments_json
 FROM lineage l
 JOIN problems p           ON p.id = l.problem_id
 JOIN incoming_requests ir ON ir.id = l.incoming_request_id
@@ -494,7 +548,7 @@ ORDER BY l.slot_index;
 ```
 
 Exports under `data/exports/<run_id>/`:
-- `problems.jsonl(.parquet)` — Problem Database rows
+- `problems.jsonl(.parquet)` — Problem Database rows, with `diagnosis_plan_json` and `viable_outcomes_json`
 - `incoming_requests.jsonl(.parquet)` — denormalized customer requests
 - `resolutions.jsonl(.parquet)` — multi-turn conversations
 - `lineage.jsonl(.parquet)` — problem → request → resolution traceability
@@ -532,10 +586,13 @@ Embedding-based dedup is enabled in `local-only` and `mixed` (which run against 
 
 | Command | Purpose |
 |---|---|
-| `csfd init` | scaffold `seeds/`, `data/`, `.env.example` |
+| `csfd init` | scaffold `seeds/my_company/`, `data/`, `.env.example` |
 | `csfd db-migrate` | create the `runs.sqlite` schema (idempotent) |
 | `csfd generate --seed N --problems M --tickets T` | run the deterministic LangGraph pipeline |
 | `csfd generate --channel phone [--disfluency none\|light\|moderate]` | generate phone-call transcripts instead of email tickets |
+| `csfd generate --company kalvora\|norrholt` | pick the company seed (`seeds/<company>/`) |
+| `csfd generate --plan cases.yaml` | pin cases explicitly (see [Case plans](#case-plans-and-problem-reuse)) |
+| `csfd generate --problems-from RUN_ID` | reuse an earlier run's problems; Phase 2 only |
 | `csfd generate --rounds N` | make every case N related contacts (callbacks); mixes go in `tickets.rounds.proportions` |
 | `csfd export RUN_ID --format jsonl\|parquet\|both\|transcripts\|all [--no-timestamps]` | dump to `data/exports/<run_id>/` (`both` = JSONL + Parquet; `all` adds transcripts) |
 | `csfd export RUN_ID --format transcripts --speaker-style upper\|title\|role --header-style csfd\|wissant\|none` | change transcript speaker labels and header layout (see [Transcript export](#transcript-export)) |
