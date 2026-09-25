@@ -252,3 +252,18 @@ def test_export_rejects_unknown_transcript_styles() -> None:
     result = runner.invoke(app, ["export", RUN_ID, "--header-style", "xml"])
     assert result.exit_code != 0
     assert "must be one of: csfd, wissant, none" in result.output
+
+
+def test_export_from_stale_database_asks_to_recreate_it(tmp_path: Path) -> None:
+    import sqlite3
+
+    db_path = tmp_path / "runs.sqlite"
+    _seed_email_case(db_path)
+    with sqlite3.connect(db_path) as raw:
+        raw.execute("ALTER TABLE lineage DROP COLUMN case_facts_json")
+    args = ["export", RUN_ID, "--format", "transcripts", "--sqlite-path", str(db_path)]
+    result = runner.invoke(app, [*args, "--out", str(tmp_path / "exports")])
+    assert result.exit_code == 1
+    assert "lineage.case_facts_json" in result.output
+    assert "csfd db-migrate" in result.output
+    assert not (tmp_path / "exports" / RUN_ID).exists()

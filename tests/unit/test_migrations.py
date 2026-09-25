@@ -184,3 +184,14 @@ def test_lineage_stores_case_facts(tmp_db_path: Path) -> None:
     with db.connect() as conn:
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(lineage)").fetchall()}
     assert "case_facts_json" in cols
+
+
+def test_stale_database_gets_a_recreate_error(tmp_db_path: Path) -> None:
+    from csfd.storage.migrations.runner import StaleSchemaError
+
+    db = Database(path=tmp_db_path)
+    apply_migrations(db)
+    with sqlite3.connect(tmp_db_path) as raw:
+        raw.execute("ALTER TABLE lineage DROP COLUMN case_facts_json")
+    with pytest.raises(StaleSchemaError, match=r"lineage\.case_facts_json.*csfd db-migrate"):
+        apply_migrations(db)

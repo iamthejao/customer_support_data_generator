@@ -59,6 +59,14 @@ def test_draw_prefers_the_model_the_problem_names() -> None:
         assert facts.asset_model == "CT-800"
 
 
+def test_draw_matches_unhyphenated_model_names_in_the_problem() -> None:
+    for text in ("The CT800 unit trips.", "Our ct 800 trips."):
+        for slot in range(10):
+            facts = draw_case_facts(CATALOGUE, seed=1, slot_index=slot, problem_text=text)
+            assert facts.asset_model == "CT-800"
+            assert identifier_mismatches([text], facts, CATALOGUE) == []
+
+
 def test_draw_without_catalogue_still_has_a_site() -> None:
     facts = draw_case_facts(CaseFactsCatalogue(), seed=7, slot_index=1)
     assert facts.asset_model is None and facts.asset_serial is None
@@ -100,6 +108,14 @@ def test_invented_model_and_serial_are_reported() -> None:
     assert "CT500-9999-ZZ" in issues[0] and "CT500-0862-YR" in issues[0]
     assert "CT-4400X" in issues[1] and "CT-500" in issues[1]
     assert "CT-800" in issues[2]
+
+
+def test_short_ct_tokens_are_not_read_as_machines() -> None:
+    texts = [
+        "I'll call back at 3pm CT 15 minutes from now.",
+        "Replace part CT-12 on the sensor board; check CT1 and CT2 on the compressor.",
+    ]
+    assert identifier_mismatches(texts, _facts(), CATALOGUE) == []
 
 
 def test_no_asset_means_nothing_to_check() -> None:

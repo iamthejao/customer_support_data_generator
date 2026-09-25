@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast, get_args
 
@@ -25,7 +26,7 @@ from csfd.settings import (
 )
 from csfd.storage.db import Database
 from csfd.storage.exporters import export_run_to_jsonl, export_run_to_parquet
-from csfd.storage.migrations.runner import apply_migrations
+from csfd.storage.migrations.runner import StaleSchemaError, apply_migrations, check_schema
 from csfd.storage.repository import (
     IncomingRequestRepo,
     LineageRepo,
@@ -104,6 +105,15 @@ def init() -> None:
     typer.echo("Initialized seeds/, data/, .env.example.")
 
 
+def _with_current_schema(step: Callable[[Database], None], db: Database) -> None:
+    """Run a schema step, turning a stale database into a clean CLI error."""
+    try:
+        step(db)
+    except StaleSchemaError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+
 @app.command("db-migrate")
 def db_migrate(
     sqlite_path: str = typer.Option(
@@ -116,7 +126,7 @@ def db_migrate(
     path = Path(sqlite_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     db = Database(path=path)
-    apply_migrations(db)
+    _with_current_schema(apply_migrations, db)
     typer.echo(f"Created schema at {path}.")
 
 
@@ -205,7 +215,7 @@ def generate(
         settings.tickets.rounds.proportions = {rounds: 1.0}
     factory = _build_factory(profile)
     db = Database(path=Path(settings.storage.sqlite_path))
-    apply_migrations(db)
+    _with_current_schema(apply_migrations, db)
     company_path, scenarios_path = _resolve_seed_paths(
         seeds_dir,
         company_seed,
@@ -283,6 +293,7 @@ def export(
     if header_style is not None:
         style.header_style = cast(HeaderStyle, _choice(header_style, HeaderStyle, "--header-style"))
     db = Database(path=Path(sqlite_path))
+    _with_current_schema(check_schema, db)
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
     if "jsonl" in formats:

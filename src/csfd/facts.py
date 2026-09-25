@@ -41,9 +41,15 @@ class CaseFacts(BaseModel):
 
 
 def _named_asset(catalogue: CaseFactsCatalogue, problem_text: str) -> AssetModel | None:
-    """The first catalogue model the problem record names, if any."""
-    for asset in catalogue.assets:
-        if re.search(rf"(?<![A-Za-z0-9]){re.escape(asset.model)}(?![0-9])", problem_text, re.I):
+    """The first catalogue model the problem record names, if any.
+
+    Uses the same matching as :func:`identifier_mismatches`, so "CT500" or
+    "CT 500" in the problem picks the CT-500 the check will then expect.
+    """
+    by_name = {_normalise(a.model): a for a in catalogue.assets}
+    mentions = [m for p in _model_patterns(catalogue) for m in p.finditer(problem_text)]
+    for m in sorted(mentions, key=lambda m: m.start()):
+        if (asset := by_name.get(_normalise(m.group()))) is not None:
             return asset
     return None
 
@@ -122,10 +128,12 @@ def _serial_pattern(serial_format: str) -> re.Pattern[str]:
 def _model_patterns(catalogue: CaseFactsCatalogue) -> list[re.Pattern[str]]:
     """One pattern per model family ("CT" + digits) plus the literal non-family names.
 
-    Trailing letters count only when upper-case, so "CT-500s" reads as the
-    CT-500 while an invented "CT-4400X" is caught whole.
+    A family token needs at least as many digits as the family's shortest
+    catalogue model, so component tags such as "CT1" or "CT 15" are not read
+    as machines. Trailing letters count only when upper-case, so "CT-500s"
+    reads as the CT-500 while an invented "CT-4400X" is caught whole.
     """
-    prefixes: list[str] = []
+    min_digits: dict[str, int] = {}
     patterns: list[re.Pattern[str]] = []
     for asset in catalogue.assets:
         family = _MODEL_FAMILY.fullmatch(asset.model)
@@ -133,11 +141,14 @@ def _model_patterns(catalogue: CaseFactsCatalogue) -> list[re.Pattern[str]]:
             patterns.append(
                 re.compile(rf"(?<![A-Za-z0-9]){re.escape(asset.model)}(?![A-Za-z0-9])", re.I)
             )
-        elif family.group(1).upper() not in prefixes:
-            prefixes.append(family.group(1).upper())
-    for prefix in prefixes:
+            continue
+        prefix, digits = family.group(1).upper(), len(family.group(2))
+        min_digits[prefix] = min(digits, min_digits.get(prefix, digits))
+    for prefix, digits in min_digits.items():
         patterns.append(
-            re.compile(rf"(?<![A-Za-z0-9])(?i:{re.escape(prefix)})[-\s]?\d+[A-Z]*(?![0-9])")
+            re.compile(
+                rf"(?<![A-Za-z0-9])(?i:{re.escape(prefix)})[-\s]?\d{{{digits},}}[A-Z]*(?![0-9])"
+            )
         )
     return patterns
 
@@ -147,8 +158,8 @@ def identifier_mismatches(
 ) -> list[str]:
     """Model and serial numbers in ``texts`` that differ from the case record.
 
-    Only identifiers shaped like the company catalogue's are recognised, so a
-    miss is possible but a hit is a real contradiction. Returns one short
+    Only identifiers shaped like the company catalogue's are recognised (see
+    :func:`_model_patterns`), so a miss is possible. Returns one short
     message per distinct wrong identifier (empty when everything matches).
     """
     if facts.asset_model is None:
