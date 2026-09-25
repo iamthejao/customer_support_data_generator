@@ -7,9 +7,16 @@ lineage rows; then, for each slot, it runs a turn-by-turn dialogue between two
 information-asymmetric agents:
 
 * the **customer** agent sees only customer-observable problem fields
-  (symptoms, impact, persona) and the conversation so far;
-* the **service** agent sees only root-cause fields (root cause, background,
-  summary, resolution hint) and the conversation so far.
+  (symptoms, impact, persona), what they find when asked to run each check of
+  the problem's diagnosis plan, and the conversation so far;
+* the **service** agent is never told the root cause: it sees a troubleshooting
+  guide built from the diagnosis plan (candidate causes, checks without their
+  results; the fix only on a contact planned to reach the cause), the contact's
+  planned beat and ending, and the conversation so far (see :mod:`csfd.diagnosis`).
+
+Each case is planned up front to end in a problem state (see
+:mod:`csfd.outcomes`); the consistency check reports the state the dialogue
+actually reached, and a miss against the plan fails the attempt.
 
 Both also see the case's seeded facts (see :mod:`csfd.facts`): the customer
 what a customer knows (their machine's model and serial, site, job role), the
