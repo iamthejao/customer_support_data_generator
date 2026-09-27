@@ -3,6 +3,8 @@
 # logged-in session (run `codex login` once). Every call runs in codex's
 # read-only sandbox with approvals disabled and no session persistence, so
 # codex cannot modify files on disk.
+# Inherits embedding.enabled: true from default.yaml, so Phase 1 dedup needs a
+# local Ollama; add `embedding: {enabled: false}` here to run without one.
 agents:
   generator:
     provider: codex_cli

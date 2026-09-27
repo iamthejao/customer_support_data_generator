@@ -1,9 +1,10 @@
 """Phase 1 subgraph — Problem Database generation.
 
-This module defines the LangGraph subgraph that ports
-:func:`csfd.pipeline.generate_problem_database` onto LangGraph. Each problem
-flows through a generator -> (optional) checker -> commit cycle, with bounded
-retries on checker failure. The subgraph shares
+This module defines the LangGraph subgraph that generates the Problem Database.
+Each problem flows through a generator -> (optional) checker -> (optional)
+embedding dedup -> commit cycle, with bounded retries on checker failure or a
+near-duplicate. The topology below omits the dedup step; ``csfd render-graphs``
+writes the exact graph to ``docs/diagrams/phase1.mmd``. The subgraph shares
 :class:`csfd.graph.pipeline_graph.PipelineState` with the parent graph and the
 Phase 2 subgraph; no input/output mapping is needed.
 

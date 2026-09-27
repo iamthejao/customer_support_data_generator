@@ -15,10 +15,8 @@ expose it as a module-level constant. ``langgraph.json`` references this
 constant directly, so per-request handlers just return the cached compiled
 graph with no I/O.
 
-NOTE: graph *execution* still does sync sqlite writes inside node functions
-(``commit_problem``, ``commit_resolution``, etc.). Running the graph from
-Studio therefore still requires ``langgraph dev --allow-blocking`` until the
-persistence layer is async-ified.
+Graph nodes persist through the async :class:`csfd.storage.db_async.AsyncDatabase`,
+so running the graph from Studio needs no ``--allow-blocking`` flag.
 """
 
 from __future__ import annotations

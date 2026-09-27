@@ -1,4 +1,4 @@
-"""Export a run's artifacts to JSONL (and Parquet — added in P1.19)."""
+"""Export a run's artifacts to JSONL and Parquet."""
 
 from __future__ import annotations
 

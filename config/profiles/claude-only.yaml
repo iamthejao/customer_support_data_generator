@@ -1,1 +1,3 @@
-# no overrides — default is already claude-only
+# No overrides: the default is already Anthropic for both agent buckets.
+# Inherits embedding.enabled: true from default.yaml, so Phase 1 dedup needs a
+# local Ollama; add `embedding: {enabled: false}` here to run without one.
