@@ -378,11 +378,11 @@ Storage:
 uv run langgraph dev
 ```
 
-This serves the parent graph from `langgraph.json` (built in `src/csfd/graph/studio.py`) at `http://127.0.0.1:2024` and opens Studio in the browser, with both phase subgraphs nested, per-node input/output inspection, time-travel debugging, and state edits. Graph nodes use the `aiosqlite`-backed store (`src/csfd/storage/db_async.py`), so no `--allow-blocking` flag is needed. CLI runs checkpoint through `csfd.graph.checkpointer.async_sqlite_checkpointer`.
+This serves the parent graph from `langgraph.json` (built in `src/csfd/graph/studio.py`) at `http://127.0.0.1:2024` and opens Studio in the browser, with both phase subgraphs nested, per-node input/output inspection, time-travel debugging, and state edits. Graph nodes write through the `aiosqlite`-backed store (`src/csfd/storage/db_async.py`), so persistence does not trip `blockbuster`'s sync-I/O trap. CLI runs checkpoint through `csfd.graph.checkpointer.async_sqlite_checkpointer`.
 
 ## Reproducibility
 
-Given the same config, `run_seed`, and a fresh database, `csfd` reproduces the **allocation plan and slot-by-slot lineage**, but **not the generated text**: temperatures are nonzero and provider models drift. Two such runs produce identical `lineage` rows `(slot_index, problem, ticket_type, customer_tier, customer_tone)`; only run-scoped UUIDs (`run_id` and the prefix of `problem_id` / `ticket_uid`) differ.
+Given the same config, `run_seed`, and a fresh database, `csfd` reproduces the **allocation plan and slot-by-slot lineage**, but **not the generated text**: temperatures are nonzero and provider models drift. Two such runs produce identical `lineage` rows `(slot_index, problem_id, ticket_type, customer_tier, customer_tone)`; only run-scoped UUIDs (`run_id` and the prefix of `problem_id` / `ticket_uid`) differ.
 
 Also drawn from `(run_seed, slot_index)` plus `tickets.calendar` / `tickets.rounds`, never the wall clock:
 

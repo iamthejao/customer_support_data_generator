@@ -16,7 +16,7 @@ constant directly, so per-request handlers just return the cached compiled
 graph with no I/O.
 
 Graph nodes persist through the async :class:`csfd.storage.db_async.AsyncDatabase`,
-so running the graph from Studio needs no ``--allow-blocking`` flag.
+so their database writes do not trip blockbuster either.
 """
 
 from __future__ import annotations
