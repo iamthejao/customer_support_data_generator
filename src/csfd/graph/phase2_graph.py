@@ -10,9 +10,10 @@ information-asymmetric agents:
   (symptoms, impact, persona), what they find when asked to run each check of
   the problem's diagnosis plan, and the conversation so far;
 * the **service** agent is never told the root cause: it sees a troubleshooting
-  guide built from the diagnosis plan (candidate causes, checks without their
-  results; the fix only on a contact planned to reach the cause), the contact's
-  planned beat and ending, and the conversation so far (see :mod:`csfd.diagnosis`).
+  guide built from the diagnosis plan (every candidate cause with its fix,
+  checks without their results), the contact's planned beat, the planned ending
+  only once it reports the diagnosis done, and the conversation so far (see
+  :mod:`csfd.diagnosis`).
 
 Each case is planned up front to end in a problem state (see
 :mod:`csfd.outcomes`); the consistency check reports the state the dialogue
