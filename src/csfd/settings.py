@@ -135,6 +135,33 @@ class RoundsConfig(BaseModel):
         return v
 
 
+ProblemStateName = Literal[
+    "fixed_verified",
+    "fixed_unverified",
+    "workaround",
+    "pending_visit",
+    "pending_part",
+    "pending_customer_test",
+    "escalated_open",
+    "not_a_fault",
+    "abandoned",
+]
+
+
+def _default_outcome_proportions() -> dict[ProblemStateName, float]:
+    return {
+        "fixed_verified": 0.35,
+        "fixed_unverified": 0.15,
+        "workaround": 0.1,
+        "pending_visit": 0.1,
+        "pending_part": 0.1,
+        "pending_customer_test": 0.05,
+        "escalated_open": 0.05,
+        "not_a_fault": 0.05,
+        "abandoned": 0.05,
+    }
+
+
 class TicketsConfig(BaseModel):
     total: int = 100
     type_proportions: dict[str, float]
@@ -146,6 +173,18 @@ class TicketsConfig(BaseModel):
     phone: PhoneConfig = Field(default_factory=PhoneConfig)
     calendar: CalendarConfig = Field(default_factory=CalendarConfig)
     rounds: RoundsConfig = Field(default_factory=RoundsConfig)
+    # The state each case is planned to end in (csfd.outcomes.ProblemState), within
+    # the states its problem allows (Phase 1's viable_outcomes).
+    outcome_proportions: dict[ProblemStateName, float] = Field(
+        default_factory=_default_outcome_proportions
+    )
+
+    @field_validator("outcome_proportions")
+    @classmethod
+    def _check_outcomes(cls, v: dict[ProblemStateName, float]) -> dict[ProblemStateName, float]:
+        if not v or sum(v.values()) <= 0 or any(w < 0 for w in v.values()):
+            raise ValueError("tickets.outcome_proportions must be non-negative with a positive sum")
+        return v
 
 
 class ValidationConfig(BaseModel):
@@ -208,8 +247,22 @@ class EnvSecrets(BaseSettings):
     langsmith_project: str | None = None
 
 
+class SeedsConfig(BaseModel):
+    """Which company seed a run uses: ``<dir>/<company>/{company,scenarios}_seed.md``."""
+
+    dir: str = "seeds"
+    company: str = "kalvora"
+
+    def company_path(self) -> Path:
+        return Path(self.dir) / self.company / "company_seed.md"
+
+    def scenarios_path(self) -> Path:
+        return Path(self.dir) / self.company / "scenarios_seed.md"
+
+
 class AppSettings(BaseModel):
     pipeline: PipelineConfig
+    seeds: SeedsConfig = Field(default_factory=SeedsConfig)
     agents: dict[str, AgentLLMConfig]
     problem_database: ProblemDatabaseConfig
     tickets: TicketsConfig

@@ -13,4 +13,5 @@ agents:
     provider: codex_cli
     model: gpt-5.5
     temperature: 0.1
-    timeout_s: 120
+    # The consistency check reads and may rewrite a whole multi-turn transcript.
+    timeout_s: 300

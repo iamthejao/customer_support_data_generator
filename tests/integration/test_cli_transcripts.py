@@ -45,7 +45,7 @@ def _seed_email_case(db_path: Path) -> None:
             run_seed=1,
             pipeline_version="test",
             git_sha=None,
-            config_snapshot_json='{"company": {"name": "CoolTherm Industrial Chillers"}}',
+            config_snapshot_json='{"company": {"name": "Kalvora Dental"}}',
             stats_json=None,
             error_summary=None,
         )
@@ -157,14 +157,13 @@ def test_export_transcripts_writes_email_exchange(tmp_path: Path) -> None:
     first, second = thread.split("\n\n" + "-" * 40 + "\n")
     assert first.splitlines()[:4] == [
         "From: Customer-premium-0001 <customer-premium-0001@customer.example>",
-        "To: CoolTherm Industrial Chillers Support <support@cooltherm-industrial-chillers.example>",
+        "To: Kalvora Dental Support <support@kalvora-dental.example>",
         "Date: Tue, 06 Jan 2026 09:15:00 +0000",
         "Subject: Display flickers",
     ]
     assert "Hello, the display flickers.\n\nThanks,\nCustomer-premium-0001" in first
     assert second.splitlines()[:5] == [
-        "From: Agent-l1-0001, CoolTherm Industrial Chillers Support "
-        "<support@cooltherm-industrial-chillers.example>",
+        "From: Agent-l1-0001, Kalvora Dental Support <support@kalvora-dental.example>",
         "To: Customer-premium-0001 <customer-premium-0001@customer.example>",
         "Date: Tue, 06 Jan 2026 10:02:00 +0000",
         "Subject: Re: Display flickers",

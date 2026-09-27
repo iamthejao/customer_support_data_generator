@@ -91,7 +91,7 @@ def _parse_case_facts(text: str) -> CaseFactsCatalogue:
 def parse_company_seed(path: Path) -> CompanyProfile:
     text = path.read_text(encoding="utf-8")
     h1 = _H1.search(text)
-    # The H1 may carry a document-title suffix ("CoolTherm — Company Profile");
+    # The H1 may carry a document-title suffix ("Kalvora Dental — Company Profile");
     # the company name is what agents say out loud, so keep only the part before it.
     name = h1.group(1).split(" — ", 1)[0].strip() if h1 else path.stem
     sections: dict[str, str] = {}

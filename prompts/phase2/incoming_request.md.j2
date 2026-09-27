@@ -46,6 +46,9 @@ Rules:
 {%- if inputs.case_history %}
 - This is a follow-up: say you contacted support before and what happened since{% if inputs.case_history[-1].ended == "dropped" %} (the last exchange ended without a conclusion){% elif inputs.case_history[-1].ended == "cap_hit" %} (the last exchange went back and forth and settled nothing){% elif inputs.case_history[-1].ended == "frustrated" %} (you broke off the last exchange and are still unhappy){% elif inputs.case_history[-1].ended == "follow_up" %} (you did the agreed next step, but the problem is still there){% else %} (the last exchange did not fix the problem){% endif %}. Keep details you already gave consistent.
 {%- endif %}
+{%- if inputs.agreed_test %}
+- Last time you agreed to run a check yourself ({{ inputs.agreed_test.how_to_check }}). You did it and found: {{ inputs.agreed_test.finding }}. Say so.
+{%- endif %}
 
 Output contract — return:
 - `subject`: short email-style subject line.

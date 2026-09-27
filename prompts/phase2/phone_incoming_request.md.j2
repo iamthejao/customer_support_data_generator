@@ -48,6 +48,9 @@ How callers talk:
 {%- if inputs.case_history %}
 - You are calling back: mention that you called before and what happened since{% if inputs.case_history[-1].ended == "dropped" %} (the line dropped last time){% elif inputs.case_history[-1].ended == "cap_hit" %} (the last call went round in circles and settled nothing){% elif inputs.case_history[-1].ended == "frustrated" %} (you hung up last time and are still unhappy){% elif inputs.case_history[-1].ended == "follow_up" %} (you did what was agreed on the last call, but the problem is still there){% else %} (the last call did not fix the problem){% endif %}. Keep details you already gave (name, machine, serial number) consistent.
 {%- endif %}
+{%- if inputs.agreed_test %}
+- Last time you agreed to run a check yourself ({{ inputs.agreed_test.how_to_check }}). You did it and found: {{ inputs.agreed_test.finding }}. Say so.
+{%- endif %}
 - Never name a root cause, internal component, or fix — you don't know them.
 - Match your tone ({{ inputs.customer_tone }}).
 {% if inputs.disfluency == "none" -%}
@@ -60,5 +63,5 @@ How callers talk:
 - Keep it to 1–4 spoken sentences. Do not write a speaker label, timestamps, or bracketed tags.
 
 Output contract — return:
-- `subject`: the reason for the call as the agent would log it in the CRM (≤80 chars, plain words, e.g. "Chiller alarm keeps tripping at night").
+- `subject`: the reason for the call as the agent would log it in the CRM (≤80 chars, plain words, e.g. "Machine alarm keeps tripping at night").
 - `body`: exactly what you say, as it would appear in a call transcript.

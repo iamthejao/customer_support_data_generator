@@ -8,13 +8,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from csfd.graph.phase2_graph import build_phase2_subgraph
+from csfd.diagnosis import ContactBeat
+from csfd.graph.phase2_graph import _contact_beat, build_phase2_subgraph
+from csfd.graph.pipeline_graph import _PlanSlot, _PriorContact, _RoundSpec
 from csfd.models.fake import FakeChatModel
+from csfd.outcomes import ProblemState
 from csfd.pipeline import ConsistencyVerdict, DialogueTurnOutput, IncomingRequestOutput
 from csfd.rounds import plan_case_rounds
 from csfd.settings import AppSettings, Channel, RoundsConfig
 from csfd.storage.db import Database
 from csfd.storage.transcripts import export_run_transcripts
+from csfd.ticket_types.definitions import TicketType
 from tests.integration import _dialogue_harness as h
 
 TICKET_UID = f"{h.RUN_ID}:000001"
@@ -39,10 +43,12 @@ def _run(
     validation: bool,
     channel: Channel = "phone",
     turn_cap: int = 20,
+    verdicts: list[ConsistencyVerdict] | None = None,
 ) -> tuple[Database, AppSettings, FakeChatModel]:
     fake = FakeChatModel(
         structured={ConsistencyVerdict: ConsistencyVerdict(status="pass")},
         structured_seq={
+            ConsistencyVerdict: list(verdicts or []),
             IncomingRequestOutput: [
                 IncomingRequestOutput(subject="Unit power-cycles", body="Hi, it power-cycles."),
                 IncomingRequestOutput(
@@ -78,7 +84,12 @@ def _follow_up_then_resolved(tmp_path: Path, channel: Channel = "phone") -> Data
         _turn("agent", "Thanks for calling back. Let's replace the PSU cable then."),
         _turn("customer", "New cable is in, it's stable now. Thanks!", "customer_satisfied"),
     ]
-    db, _, _ = _run(tmp_path, rounds, turns, validation=True, channel=channel)
+    # The checker reports each call's planned state: the customer's test, then fixed.
+    verdicts = [
+        ConsistencyVerdict(status="pass", problem_state=ProblemState.PENDING_CUSTOMER_TEST),
+        ConsistencyVerdict(status="pass", problem_state=ProblemState.FIXED_VERIFIED),
+    ]
+    db, _, _ = _run(tmp_path, rounds, turns, validation=True, channel=channel, verdicts=verdicts)
     return db
 
 
@@ -210,6 +221,17 @@ def _callback_histories(db: Database) -> list[list[dict[str, Any]]]:
     return histories
 
 
+def _callback_inputs(db: Database, node_name: str) -> list[dict[str, Any]]:
+    """The inputs of every `node_name` call of the second contact."""
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT input_json FROM agent_traces WHERE run_id = ? AND artifact_id = ? "
+            "AND node_name = ?",
+            (h.RUN_ID, f"{TICKET_UID}:r02", node_name),
+        ).fetchall()
+    return [json.loads(r["input_json"]) for r in rows]
+
+
 def test_capped_first_call_is_not_reported_as_an_agreed_next_step(tmp_path: Path) -> None:
     rounds = RoundsConfig(proportions={2: 1.0}, callback_reasons={"follow_up": 1.0})
     turns = [
@@ -229,6 +251,49 @@ def test_capped_first_call_is_not_reported_as_an_agreed_next_step(tmp_path: Path
     assert second["resolved"]
     for history in _callback_histories(db):
         assert [c["ended"] for c in history] == ["cap_hit"]
+    # Nothing was agreed, so the callback reports no test result, and the check
+    # planned for the capped call moves into the callback instead of counting as done.
+    [opening] = _callback_inputs(db, "incoming_request_generator")
+    assert opening["agreed_test"] is None
+    for agent in _callback_inputs(db, "agent_turn_generator"):
+        assert (agent["guide"]["done_steps"], agent["guide"]["beat_steps"]) == ([], [1, 2])
+
+
+def test_checks_carried_into_a_follow_up_count_as_done_after_it(tmp_path: Path) -> None:
+    # Three contacts with one check each; the first is capped, the second agrees a next step.
+    slot = _PlanSlot(
+        index=1,
+        problem_id="p001",
+        ticket_type=TicketType.L1,
+        tier="standard",
+        tone="neutral",
+        rounds=[
+            _RoundSpec(sequence=i + 1, count=3, end_mode=mode, beat=ContactBeat(checks=[i]))
+            for i, mode in enumerate(("follow_up", "follow_up", "final"))
+        ],
+    )
+    agreed = DialogueTurnOutput(speaker="agent", content="x", done=True, done_reason="follow_up")
+    history = [
+        _PriorContact(sequence=1, started_at=None, ended_at=None, end_reason="cap_hit", turns=[]),
+        _PriorContact(
+            sequence=2, started_at=None, ended_at=None, end_reason="agent_done", turns=[agreed]
+        ),
+    ]
+    settings = h.build_settings(tmp_path, validation_enabled=False)
+    state = h.initial_state(settings).model_copy(update={"case_history": history})
+
+    second, done_before_second = _contact_beat(state, slot, slot.rounds[1])
+    assert (second and second.checks, done_before_second) == ([0, 1], [])
+    third, done_before_third = _contact_beat(state, slot, slot.rounds[2])
+    assert (third and third.checks, done_before_third) == ([2], [0, 1])
+
+
+def test_agreed_test_opens_the_callback_and_counts_as_done(tmp_path: Path) -> None:
+    db = _follow_up_then_resolved(tmp_path)
+    [opening] = _callback_inputs(db, "incoming_request_generator")
+    assert opening["agreed_test"]["finding"] == "the display flickers when the plug moves"
+    for agent in _callback_inputs(db, "agent_turn_generator"):
+        assert (agent["guide"]["done_steps"], agent["guide"]["beat_steps"]) == ([1], [2])
 
 
 def test_unhappy_hang_up_is_not_reported_as_an_agreed_next_step(tmp_path: Path) -> None:
@@ -333,6 +398,8 @@ def test_email_case_is_a_series_of_dated_threads(tmp_path: Path) -> None:
         "content": "Hi, it power-cycles.",
         "done": False,
         "done_reason": None,
+        "commitments": [],
+        "diagnosis_done": False,
         "sent_at": first["started_at"],
     }
     for row in (first, second):

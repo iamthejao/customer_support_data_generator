@@ -15,6 +15,7 @@ from typing import Any
 from csfd.agents.factory import AgentFactory
 from csfd.graph.phase2_graph import build_phase2_subgraph
 from csfd.models.fake import FakeChatModel
+from csfd.outcomes import ProblemState
 from csfd.pipeline import ConsistencyVerdict, DialogueTurnOutput, IncomingRequestOutput
 from csfd.seeds.company import AssetModel, CaseFactsCatalogue, CompanyProfile
 from csfd.storage.db import Database
@@ -49,7 +50,10 @@ def _factory(first_reply: str, verdicts: int) -> AgentFactory:
                 ),
             ],
             # The LLM checker passes every attempt; only the code check can fail one.
-            ConsistencyVerdict: [ConsistencyVerdict(status="pass")] * verdicts,
+            ConsistencyVerdict: [
+                ConsistencyVerdict(status="pass", problem_state=ProblemState.FIXED_VERIFIED)
+            ]
+            * verdicts,
         },
     )
     return h.factory(fake)

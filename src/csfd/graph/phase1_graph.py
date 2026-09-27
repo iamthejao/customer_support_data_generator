@@ -99,6 +99,11 @@ async def generate_problem_node(
     inputs: dict[str, Any] = {
         "company_name": state.company.name,
         "company_overview": state.company.raw_markdown[:2000],
+        # The seed's case-facts catalogue sits past the overview cut, so pass it whole.
+        "products": [
+            {"model": a.model, "description": a.description}
+            for a in state.company.case_facts.assets
+        ],
         "scenarios": [dataclasses.asdict(s) for s in state.scenarios.scenarios[:8]],
         "target_complexity": target_complexity,
         "prior_titles": [p.title for p in state.problems_committed[-10:]],
@@ -263,6 +268,8 @@ async def commit_problem_node(
         fault_domain=str(draft.fault_domain),
         customer_impact=str(draft.customer_impact),
         tags=list(draft.tags),
+        diagnosis_plan=draft.diagnosis_plan.model_dump(mode="json"),
+        viable_outcomes=[str(o) for o in dict.fromkeys(draft.viable_outcomes)],
     )
     await ProblemRepo(db).acreate(adb, record)
 

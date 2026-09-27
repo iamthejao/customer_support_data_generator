@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from csfd.facts import (
     CaseFacts,
     crm_view,
@@ -11,8 +13,8 @@ from csfd.seeds.company import AssetModel, CaseFactsCatalogue, parse_company_see
 
 CATALOGUE = CaseFactsCatalogue(
     assets=[
-        AssetModel("CT-500", "Mid-size chiller", "CT500-####-??"),
-        AssetModel("CT-800", "Large chiller", "CT800-####-??"),
+        AssetModel("FX-608", "8-section IS machine", "FX608-####-??"),
+        AssetModel("FX-612", "12-section IS machine", "FX612-####-??"),
     ],
     caller_roles=["maintenance technician"],
     site_locales=["en_GB"],
@@ -21,9 +23,9 @@ CATALOGUE = CaseFactsCatalogue(
 
 def _facts() -> CaseFacts:
     return CaseFacts(
-        asset_model="CT-500",
-        asset_description="Mid-size chiller",
-        asset_serial="CT500-0862-YR",
+        asset_model="FX-608",
+        asset_description="8-section IS machine",
+        asset_serial="FX608-0862-YR",
         customer_company="Wells-Byrne",
         site_city="North Paulaville",
         site_country="United Kingdom",
@@ -41,10 +43,10 @@ def test_draw_is_deterministic_per_seed_and_slot() -> None:
 
 def test_draw_uses_the_catalogue() -> None:
     facts = draw_case_facts(CATALOGUE, seed=1, slot_index=1)
-    assert facts.asset_model in {"CT-500", "CT-800"}
+    assert facts.asset_model in {"FX-608", "FX-612"}
     assert facts.asset_serial is not None
     assert facts.asset_serial.startswith(facts.asset_model.replace("-", "") + "-")
-    assert len(facts.asset_serial) == len("CT500-0000-AA")
+    assert len(facts.asset_serial) == len("FX608-0000-AA")
     assert facts.asset_serial[-2:].isupper()
     assert facts.caller_role == "maintenance technician"
     assert facts.site_country == "United Kingdom"
@@ -54,16 +56,16 @@ def test_draw_uses_the_catalogue() -> None:
 def test_draw_prefers_the_model_the_problem_names() -> None:
     for slot in range(10):
         facts = draw_case_facts(
-            CATALOGUE, seed=7, slot_index=slot, problem_text="The CT-800 trips its alarm."
+            CATALOGUE, seed=7, slot_index=slot, problem_text="The FX-612 trips its alarm."
         )
-        assert facts.asset_model == "CT-800"
+        assert facts.asset_model == "FX-612"
 
 
 def test_draw_matches_unhyphenated_model_names_in_the_problem() -> None:
-    for text in ("The CT800 unit trips.", "Our ct 800 trips."):
+    for text in ("The FX612 unit trips.", "Our fx 612 trips."):
         for slot in range(10):
             facts = draw_case_facts(CATALOGUE, seed=1, slot_index=slot, problem_text=text)
-            assert facts.asset_model == "CT-800"
+            assert facts.asset_model == "FX-612"
             assert identifier_mismatches([text], facts, CATALOGUE) == []
 
 
@@ -80,53 +82,69 @@ def test_views_split_customer_and_crm_facts() -> None:
         "role": "maintenance technician",
         "company": "Wells-Byrne",
         "site": "North Paulaville, United Kingdom",
-        "asset_model": "CT-500",
-        "asset_serial": "CT500-0862-YR",
+        "asset_model": "FX-608",
+        "asset_serial": "FX608-0862-YR",
     }
     crm = crm_view(facts)
     assert crm["account"] == "Wells-Byrne"
     assert crm["contact_role"] == "maintenance technician"
-    assert crm["asset_description"] == "Mid-size chiller"
+    assert crm["asset_description"] == "8-section IS machine"
 
 
 def test_matching_identifiers_pass() -> None:
     texts = [
-        "Our CT-500 keeps tripping. Two CT-500s on site, actually.",
-        "Serial is CT500-0862-YR, or ct500 0862 yr as I read it.",
-        "Thanks, I see the CT 500 on your account.",
+        "Our FX-608 keeps tripping. Two FX-608s on site, actually.",
+        "Serial is FX608-0862-YR, or fx608 0862 yr as I read it.",
+        "Thanks, I see the FX 608 on your account.",
     ]
     assert identifier_mismatches(texts, _facts(), CATALOGUE) == []
 
 
 def test_invented_model_and_serial_are_reported() -> None:
     texts = [
-        "It's the CT-4400X, serial CT500-9999-ZZ.",
-        "Right, the CT-800. And again the CT-4400X.",
+        "It's the FX-4400X, serial FX608-9999-ZZ.",
+        "Right, the FX-612. And again the FX-4400X.",
     ]
     issues = identifier_mismatches(texts, _facts(), CATALOGUE)
     assert len(issues) == 3
-    assert "CT500-9999-ZZ" in issues[0] and "CT500-0862-YR" in issues[0]
-    assert "CT-4400X" in issues[1] and "CT-500" in issues[1]
-    assert "CT-800" in issues[2]
+    assert "FX608-9999-ZZ" in issues[0] and "FX608-0862-YR" in issues[0]
+    assert "FX-4400X" in issues[1] and "FX-608" in issues[1]
+    assert "FX-612" in issues[2]
 
 
-def test_short_ct_tokens_are_not_read_as_machines() -> None:
+def test_short_family_tokens_are_not_read_as_machines() -> None:
     texts = [
-        "I'll call back at 3pm CT 15 minutes from now.",
-        "Replace part CT-12 on the sensor board; check CT1 and CT2 on the compressor.",
+        "I'll call back at 3pm, FX 15 minutes from now.",
+        "Replace part FX-12 on the sensor board; check FX1 and FX2 on the mechanism.",
     ]
     assert identifier_mismatches(texts, _facts(), CATALOGUE) == []
 
 
 def test_no_asset_means_nothing_to_check() -> None:
     facts = _facts().model_copy(update={"asset_model": None, "asset_serial": None})
-    assert identifier_mismatches(["the CT-4400X"], facts, CATALOGUE) == []
+    assert identifier_mismatches(["the FX-4400X"], facts, CATALOGUE) == []
 
 
-def test_shipped_seed_draws_cooltherm_facts() -> None:
-    catalogue = parse_company_seed(Path("seeds/company_seed.md")).case_facts
-    facts = draw_case_facts(catalogue, seed=42, slot_index=1, problem_text="CT-500 alarm")
-    assert facts.asset_model == "CT-500"
-    assert (
-        identifier_mismatches([f"My CT-500, serial {facts.asset_serial}"], facts, catalogue) == []
-    )
+@pytest.mark.parametrize(
+    ("company", "model", "prose"),
+    [
+        (
+            "kalvora",
+            "CF-600",
+            "The glaze firing at 770 degrees came out glossy; the silver sample melts at 961. "
+            "We fired 12 crowns on tray 2, program P-2025.2, lot V24117, twice at 3 pm.",
+        ),
+        (
+            "norrholt",
+            "FX-608",
+            "Section 5 throws checks, 8% rejects, gob weight 385 g at 1,150 degrees. "
+            "Job 4471 is the 330 ml bottle; the takeout on angle moved by 4 degrees on shift 2.",
+        ),
+    ],
+)
+def test_shipped_seeds_draw_their_own_facts(company: str, model: str, prose: str) -> None:
+    catalogue = parse_company_seed(Path("seeds") / company / "company_seed.md").case_facts
+    facts = draw_case_facts(catalogue, seed=42, slot_index=1, problem_text=f"{model} alarm")
+    assert facts.asset_model == model
+    said = f"My {model}, serial {facts.asset_serial}. {prose}"
+    assert identifier_mismatches([said], facts, catalogue) == []

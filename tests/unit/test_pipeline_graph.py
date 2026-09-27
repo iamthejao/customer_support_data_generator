@@ -54,7 +54,7 @@ def _company() -> CompanyProfile:
 
 
 def _scenarios() -> ScenarioCatalogue:
-    return ScenarioCatalogue(scenarios=[], source_path=Path("seeds/scenarios_seed.md"))
+    return ScenarioCatalogue(scenarios=[], source_path=Path("seeds/kalvora/scenarios_seed.md"))
 
 
 def _build_settings(*, sqlite_path: Path) -> AppSettings:
@@ -192,8 +192,12 @@ def test_init_run_node_writes_run_record(tmp_path: Path) -> None:
         "validation",
         "embedding",
         "company",
+        "case_plan",
+        "problems_from",
     }
-    assert snapshot["company"] == {"name": "X"}
+    assert run.phase == "full" and run.parent_run_id is None
+    assert snapshot["case_plan"] is None and snapshot["problems_from"] is None
+    assert snapshot["company"] == {"name": "X", "seed": "kalvora"}
     assert snapshot["tickets"]["channel"] == "email"
     assert snapshot["tickets"]["rounds"]["proportions"] == {"1": 1.0}
     assert run.stats_json is None  # not populated until finalize

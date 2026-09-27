@@ -16,7 +16,16 @@ from typing import get_args
 
 import pytest
 
+from csfd.diagnosis import (
+    CandidateCause,
+    ContactBeat,
+    DiagnosisPlan,
+    DiagnosticCheck,
+    agent_guide,
+    customer_findings,
+)
 from csfd.graph.phase2_graph import EndedLabel
+from csfd.outcomes import ProblemState
 from csfd.prompts.registry import PromptRegistry
 
 
@@ -29,9 +38,9 @@ def registry() -> PromptRegistry:
 
 def _base_problem_inputs(**overrides: object) -> dict[str, object]:
     base: dict[str, object] = {
-        "company_name": "CoolTherm",
+        "company_name": "Kalvora",
         "target_complexity": "medium",
-        "company_profile": "Industrial chiller manufacturer.",
+        "company_profile": "Dental equipment manufacturer.",
         "scenarios": "Standard CS scenarios.",
     }
     base.update(overrides)
@@ -93,7 +102,7 @@ def test_incoming_request_renders_symptoms_only(registry: PromptRegistry) -> Non
     handle = registry.get("phase2.incoming_request")
     rendered = handle.template.render(
         inputs={
-            "company_name": "CoolTherm",
+            "company_name": "Kalvora",
             "customer_name": "Alice",
             "customer_tier": "standard",
             "customer_tone": "neutral",
@@ -110,7 +119,7 @@ def test_customer_turn_renders_history(registry: PromptRegistry) -> None:
     handle = registry.get("phase2.customer_turn")
     rendered = handle.template.render(
         inputs={
-            "company_name": "CoolTherm",
+            "company_name": "Kalvora",
             "customer_tone": "frustrated",
             "symptoms": ["fan rattles"],
             "customer_impact": "degraded",
@@ -122,36 +131,150 @@ def test_customer_turn_renders_history(registry: PromptRegistry) -> None:
     assert "Can you describe the noise?" in rendered
 
 
-def test_agent_turn_renders_root_cause(registry: PromptRegistry) -> None:
+_PLAN = DiagnosisPlan(
+    candidate_causes=[
+        CandidateCause(
+            cause="loose PSU connector",
+            is_root_cause=True,
+            resolution_steps=["Reseat the PSU connector until it clicks"],
+            parts=[],
+            verification="Run the unit for an hour",
+            verification_finding="no restarts in an hour",
+        ),
+        CandidateCause(
+            cause="failing PSU",
+            resolution_steps=["Replace the PSU module"],
+            parts=["PSU module"],
+            verification="Run the unit for an hour",
+        ),
+        CandidateCause(
+            cause="mains brownout",
+            resolution_steps=["Move the unit to a UPS-backed socket"],
+            workaround="Run the unit from a portable UPS",
+        ),
+    ],
+    checks=[
+        DiagnosticCheck(
+            check="Mains check",
+            how_to_check="Plug a lamp into the same socket and watch it",
+            finding="the lamp stays steady",
+            rules_out=["mains brownout"],
+        ),
+        DiagnosticCheck(
+            check="Connector check",
+            how_to_check="Wiggle the PSU plug at the back of the unit",
+            finding="the display flickers when the plug moves",
+            rules_out=["failing PSU"],
+            confirms_cause=True,
+        ),
+    ],
+)
+
+
+def _guide(state: ProblemState, **beat: object) -> dict[str, object]:
+    return agent_guide(
+        _PLAN,
+        ContactBeat(problem_state=state, **beat),
+        done_checks=[],
+        seed_label="t",
+    )
+
+
+def test_agent_turn_renders_the_guide_not_the_root_cause(registry: PromptRegistry) -> None:
     handle = registry.get("phase2.agent_turn")
-    rendered = handle.template.render(
+    inputs = {
+        "company_name": "Kalvora",
+        "agent_name": "Bob",
+        "ticket_type": "l2",
+        "conversation_so_far": [{"speaker": "customer", "content": "It keeps restarting."}],
+        "turn_index": 2,
+        "turn_cap": 20,
+    }
+    early = handle.template.render(
         inputs={
-            "company_name": "CoolTherm",
-            "agent_name": "Bob",
-            "ticket_type": "l2",
-            "problem": {
-                "title": "Brownout",
-                "summary": "PSU brownout",
-                "background": "loose connector",
-                "category": "power",
-                "fault_domain": "hardware",
-                "root_cause": ["loose PSU connector"],
-                "resolution_hint": "reseat the connector",
+            **inputs,
+            "guide": _guide(ProblemState.PENDING_CUSTOMER_TEST, checks=[0], next_check=1),
+            "planned": {
+                "problem_state": "pending_customer_test",
+                "ending": "agreed_next_step",
+                "cause_confirmed": False,
+                "final": False,
+                "revealed": True,
             },
-            "conversation_so_far": [{"speaker": "customer", "content": "It keeps restarting."}],
-            "turn_index": 2,
-            "turn_cap": 20,
         },
         prior_issues=[],
     )
-    assert "loose PSU connector" in rendered
+    assert "Wiggle the PSU plug at the back of the unit" in early
+    assert "the display flickers" not in early  # the customer's finding, not the agent's
+    # Every candidate cause comes with its fix, so a fix does not mark the true cause.
+    for fix in ("Reseat the PSU connector", "Replace the PSU module", "UPS-backed socket"):
+        assert fix in early
+    assert "A workaround that keeps the customer working meanwhile: Run the unit" in early
+    assert "Work through check 1 of the guide" in early
+    assert "runs check 2 (Connector check)" in early
+    final = handle.template.render(
+        inputs={
+            **inputs,
+            "guide": _guide(ProblemState.FIXED_VERIFIED, checks=[1], cause_confirmed=True),
+            "planned": {
+                "problem_state": "fixed_verified",
+                "ending": "customer_satisfied",
+                "cause_confirmed": True,
+                "final": True,
+                "revealed": True,
+            },
+        },
+        prior_issues=[],
+    )
+    assert "Reseat the PSU connector until it clicks" in final
+    assert "How to confirm the fix worked: Run the unit for an hour" in final
+    assert 'done_reason="resolved"' in final
+    # Before the diagnosis is done, the agent is not told how the contact ends.
+    hidden = handle.template.render(
+        inputs={
+            **inputs,
+            "guide": _guide(ProblemState.PENDING_PART, checks=[0, 1], cause_confirmed=True),
+            "planned": {"final": True, "revealed": False},
+        },
+        prior_issues=[],
+    )
+    assert "set `diagnosis_done=true`" in hidden
+    assert "part" not in hidden.split("Plan for this contact")[1].split("Conversation so far")[0]
+
+
+def test_customer_turn_renders_findings_and_planned_ending(registry: PromptRegistry) -> None:
+    rendered = registry.get("phase2.customer_turn").template.render(
+        inputs={
+            "company_name": "Kalvora",
+            "customer_tone": "neutral",
+            "customer_impact": "degraded",
+            "symptoms": ["it restarts"],
+            "conversation_so_far": [],
+            "turn_index": 3,
+            "turn_cap": 20,
+            "diagnosis": customer_findings(
+                _PLAN,
+                ContactBeat(checks=[0, 1], problem_state=ProblemState.PENDING_PART),
+                done_checks=[],
+            ),
+            "planned": {
+                "problem_state": "pending_part",
+                "ending": "agreed_next_step",
+                "cause_confirmed": True,
+                "final": True,
+            },
+        }
+    )
+    assert "you find: the display flickers when the plug moves" in rendered
+    assert "loose PSU connector" not in rendered
+    assert 'done_reason="follow_up"' in rendered
 
 
 def test_agent_turn_renders_prior_issues_on_retry(registry: PromptRegistry) -> None:
     handle = registry.get("phase2.agent_turn")
     rendered = handle.template.render(
         inputs={
-            "company_name": "CoolTherm",
+            "company_name": "Kalvora",
             "agent_name": "Bob",
             "ticket_type": "l1",
             "problem": {
@@ -178,7 +301,7 @@ def test_consistency_check_renders_complexity(registry: PromptRegistry) -> None:
     handle = registry.get("phase2.conversation_consistency_check")
     rendered = handle.template.render(
         inputs={
-            "company_name": "CoolTherm",
+            "company_name": "Kalvora",
             "customer_tone": "neutral",
             "problem": {
                 "title": "T",
@@ -205,8 +328,8 @@ def test_consistency_check_renders_complexity(registry: PromptRegistry) -> None:
 
 def _phone_customer_inputs(disfluency: str) -> dict[str, object]:
     return {
-        "company_name": "CoolTherm",
-        "agent_greeting": "Thank you for calling CoolTherm support, this is Agent-l1-0001.",
+        "company_name": "Kalvora",
+        "agent_greeting": "Thank you for calling Kalvora support, this is Agent-l1-0001.",
         "customer_name": "Customer-standard-0001",
         "customer_tier": "standard",
         "customer_tone": "frustrated",
@@ -242,7 +365,7 @@ def test_phone_incoming_request_shows_greeting(registry: PromptRegistry) -> None
     rendered = registry.get("phase2.phone_incoming_request").template.render(
         inputs=_phone_customer_inputs("light")
     )
-    assert "AGENT: Thank you for calling CoolTherm support, this is Agent-l1-0001." in rendered
+    assert "AGENT: Thank you for calling Kalvora support, this is Agent-l1-0001." in rendered
 
 
 def test_phone_customer_turn_renders_uppercase_speakers(registry: PromptRegistry) -> None:
@@ -254,18 +377,10 @@ def test_phone_customer_turn_renders_uppercase_speakers(registry: PromptRegistry
 
 def _phone_agent_inputs(disfluency: str) -> dict[str, object]:
     return {
-        "company_name": "CoolTherm",
+        "company_name": "Kalvora",
         "agent_name": "Agent-l2-0004",
         "ticket_type": "l2",
-        "problem": {
-            "title": "t",
-            "summary": "s",
-            "background": "b",
-            "category": "c",
-            "fault_domain": "hardware",
-            "root_cause": ["loose PSU connector"],
-            "resolution_hint": "reseat",
-        },
+        "guide": _guide(ProblemState.FIXED_VERIFIED, checks=[0, 1], cause_confirmed=True),
         "disfluency": disfluency,
         "conversation_so_far": [{"speaker": "customer", "content": "It keeps tripping."}],
         "turn_index": 3,
@@ -282,7 +397,8 @@ def test_phone_agent_turn_renders_call_flow(registry: PromptRegistry) -> None:
     }
     assert len(set(renders.values())) == 3
     for rendered in renders.values():
-        assert "loose PSU connector" in rendered
+        assert "Wiggle the PSU plug at the back of the unit" in rendered
+        assert "the display flickers" not in rendered
         assert "CUSTOMER: It keeps tripping." in rendered
         assert "agent read the root cause aloud" in rendered
 
@@ -307,7 +423,7 @@ _ENDED_LABELS = ("dropped", "cap_hit", "frustrated", "follow_up", "unresolved")
 
 def _email_customer_inputs() -> dict[str, object]:
     return {
-        "company_name": "CoolTherm",
+        "company_name": "Kalvora",
         "customer_name": "Customer-standard-0001",
         "customer_tier": "standard",
         "customer_tone": "neutral",
@@ -323,7 +439,7 @@ def _email_customer_inputs() -> dict[str, object]:
 
 def _email_agent_inputs() -> dict[str, object]:
     return {
-        "company_name": "CoolTherm",
+        "company_name": "Kalvora",
         "agent_name": "Agent-l2-0004",
         "ticket_type": "l2",
         "problem": {
@@ -344,7 +460,7 @@ def _email_agent_inputs() -> dict[str, object]:
 
 def _checker_inputs() -> dict[str, object]:
     return {
-        "company_name": "CoolTherm",
+        "company_name": "Kalvora",
         "customer_tone": "neutral",
         "problem": {"symptoms": [], "root_cause": []},
         "candidate": {"subject": "s", "body": "b", "end_reason": "agent_done", "turns": []},
@@ -410,16 +526,16 @@ _CUSTOMER_FACTS = {
     "role": "maintenance technician",
     "company": "Wells-Byrne",
     "site": "North Paulaville, United Kingdom",
-    "asset_model": "CT-500",
-    "asset_serial": "CT500-0862-YR",
+    "asset_model": "CF-600",
+    "asset_serial": "CF600-0862-YR",
 }
 _CRM_FACTS = {
     "account": "Wells-Byrne",
     "site": "North Paulaville, United Kingdom",
     "contact_role": "maintenance technician",
-    "asset_model": "CT-500",
-    "asset_description": "Mid-size chiller",
-    "asset_serial": "CT500-0862-YR",
+    "asset_model": "CF-600",
+    "asset_description": "Ceramic firing furnace",
+    "asset_serial": "CF600-0862-YR",
 }
 _CUSTOMER_PROMPTS = [
     "phase2.incoming_request",
@@ -437,7 +553,7 @@ def test_customer_prompts_show_the_case_facts(registry: PromptRegistry, prompt: 
         inputs={**base, "facts": _CUSTOMER_FACTS, "fact_issues": ["named the CT-4400X"]}
     )
     assert "You are the maintenance technician at Wells-Byrne" in rendered
-    assert "CT-500, serial number CT500-0862-YR" in rendered
+    assert "CF-600, serial number CF600-0862-YR" in rendered
     assert "named the CT-4400X" in rendered
     assert "you may make up" not in rendered
     # Without facts (a hand-built slot) the prompt renders as before.
@@ -450,7 +566,10 @@ def test_agent_prompts_show_the_crm_record(registry: PromptRegistry, prompt: str
     base = _phone_agent_inputs("light")
     rendered = template.render(inputs={**base, "facts": _CRM_FACTS})
     assert "Account: Wells-Byrne (North Paulaville, United Kingdom)" in rendered
-    assert "Installed machine: CT-500 (Mid-size chiller), serial number CT500-0862-YR" in rendered
+    assert (
+        "Installed machine: CF-600 (Ceramic firing furnace), serial number CF600-0862-YR"
+        in rendered
+    )
     assert "CRM record" not in template.render(inputs=base)
 
 
@@ -467,8 +586,8 @@ def test_consistency_check_sees_background_and_case_record(registry: PromptRegis
                 "resolution_hint": "h",
             },
             "facts": {
-                "asset_model": "CT-500",
-                "asset_serial": "CT500-0862-YR",
+                "asset_model": "CF-600",
+                "asset_serial": "CF600-0862-YR",
                 "customer_company": "Wells-Byrne",
                 "site_city": "North Paulaville",
                 "site_country": "United Kingdom",
@@ -478,6 +597,44 @@ def test_consistency_check_sees_background_and_case_record(registry: PromptRegis
         }
     )
     assert "Relocated six months ago." in rendered
-    assert "Machine: CT-500, serial number CT500-0862-YR" in rendered
+    assert "Machine: CF-600, serial number CF600-0862-YR" in rendered
     assert "plant engineer at Wells-Byrne, North Paulaville, United Kingdom" in rendered
     assert "(l) Identifiers, dates and history" in rendered
+
+
+def test_consistency_check_shows_the_plan_and_asks_for_the_state(registry: PromptRegistry) -> None:
+    rendered = registry.get("phase2.conversation_consistency_check").template.render(
+        inputs={
+            "customer_tone": "neutral",
+            "problem": {"symptoms": [], "root_cause": ["loose PSU connector"]},
+            "diagnosis": {
+                "plan": _PLAN.model_dump(mode="json"),
+                "confirming_step": 2,
+                "done_steps": [],
+                "beat_steps": [1, 2],
+                "next_step": None,
+            },
+            "planned": {"problem_state": "pending_part", "ending": "agreed_next_step"},
+            "candidate": {
+                "subject": "s",
+                "body": "b",
+                "end_reason": "agent_done",
+                "turns": [
+                    {
+                        "speaker": "agent",
+                        "content": "I'll ship a cable.",
+                        "done": True,
+                        "done_reason": "follow_up",
+                        "commitments": [
+                            {"who": "agent", "what": "ship a cable", "due": "tomorrow"}
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+    assert "customer finds: the display flickers when the plug moves" in rendered
+    assert "[confirms the root cause]" in rendered
+    assert "problem state `pending_part`" in rendered
+    assert "[recorded commitments: agent — ship a cable (due: tomorrow)]" in rendered
+    assert "- (o) Report in `problem_state`" in rendered

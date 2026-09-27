@@ -11,4 +11,5 @@ agents:
     provider: claude_code_cli
     model: claude-haiku-4-5
     temperature: 0.1
-    timeout_s: 120
+    # The consistency check reads and may rewrite a whole multi-turn transcript.
+    timeout_s: 300

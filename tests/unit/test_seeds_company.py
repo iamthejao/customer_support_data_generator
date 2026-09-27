@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from csfd.seeds.company import CompanyProfile, parse_company_seed
 
 
@@ -18,14 +20,19 @@ def test_parse_company_seed_preserves_source_path() -> None:
 
 def test_parse_company_seed_drops_document_title_suffix(tmp_path: Path) -> None:
     seed = tmp_path / "company_seed.md"
-    seed.write_text(
-        "# CoolTherm Industrial Chillers — Company Profile (Seed File)\n\n## About\nx\n"
-    )
-    assert parse_company_seed(seed).name == "CoolTherm Industrial Chillers"
+    seed.write_text("# Kalvora Dental — Company Profile (Seed File)\n\n## About\nx\n")
+    assert parse_company_seed(seed).name == "Kalvora Dental"
 
 
-def test_shipped_company_seed_name_is_speakable() -> None:
-    assert parse_company_seed(Path("seeds/company_seed.md")).name == "CoolTherm Industrial Chillers"
+SHIPPED = [
+    ("kalvora", "Kalvora Dental", "CF-600"),
+    ("norrholt", "Norrholt Glass Machinery", "FX-608"),
+]
+
+
+@pytest.mark.parametrize(("company", "name", "_model"), SHIPPED)
+def test_shipped_company_seed_name_is_speakable(company: str, name: str, _model: str) -> None:
+    assert parse_company_seed(Path("seeds") / company / "company_seed.md").name == name
 
 
 def test_parse_company_seed_reads_case_facts_catalogue() -> None:
@@ -37,9 +44,10 @@ def test_parse_company_seed_reads_case_facts_catalogue() -> None:
     assert catalogue.site_locales == ["en_GB"]
 
 
-def test_shipped_company_seed_lists_the_flagship_model() -> None:
-    catalogue = parse_company_seed(Path("seeds/company_seed.md")).case_facts
-    assert "CT-500" in [a.model for a in catalogue.assets]
+@pytest.mark.parametrize(("company", "_name", "model"), SHIPPED)
+def test_shipped_company_seed_lists_its_models(company: str, _name: str, model: str) -> None:
+    catalogue = parse_company_seed(Path("seeds") / company / "company_seed.md").case_facts
+    assert model in [a.model for a in catalogue.assets]
     assert all(a.serial_format for a in catalogue.assets)
     assert catalogue.caller_roles
 

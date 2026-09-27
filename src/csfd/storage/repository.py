@@ -360,6 +360,42 @@ class ProblemRecord:
     fault_domain: str = "software"
     customer_impact: str = "degraded"
     tags: list[str] = dataclasses_field(default_factory=list)
+    # csfd.diagnosis.DiagnosisPlan as a dict; None for a problem written without one.
+    diagnosis_plan: dict[str, Any] | None = None
+    # csfd.outcomes.ProblemState values this problem can end in (empty = any).
+    viable_outcomes: list[str] = dataclasses_field(default_factory=list)
+
+
+_PROBLEM_INSERT_SQL = """
+    INSERT OR IGNORE INTO problems
+      (id, run_id, title, summary, background, category,
+       complexity, resolution_hints_json, quality_flag, created_at,
+       symptoms_json, root_cause_json, fault_domain, customer_impact, tags_json,
+       diagnosis_plan_json, viable_outcomes_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+
+def _problem_params(p: ProblemRecord) -> tuple[Any, ...]:
+    return (
+        p.id,
+        p.run_id,
+        p.title,
+        p.summary,
+        p.background,
+        p.category,
+        p.complexity,
+        json.dumps(p.resolution_hints, ensure_ascii=False),
+        p.quality_flag,
+        p.created_at.isoformat(),
+        json.dumps(p.symptoms, ensure_ascii=False),
+        json.dumps(p.root_cause, ensure_ascii=False),
+        p.fault_domain,
+        p.customer_impact,
+        json.dumps(p.tags, ensure_ascii=False),
+        json.dumps(p.diagnosis_plan, ensure_ascii=False) if p.diagnosis_plan is not None else None,
+        json.dumps(p.viable_outcomes, ensure_ascii=False),
+    )
 
 
 class ProblemRepo:
@@ -368,61 +404,11 @@ class ProblemRepo:
 
     def create(self, p: ProblemRecord) -> None:
         with self.db.connect() as conn:
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO problems
-                  (id, run_id, title, summary, background, category,
-                   complexity, resolution_hints_json, quality_flag, created_at,
-                   symptoms_json, root_cause_json, fault_domain, customer_impact, tags_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    p.id,
-                    p.run_id,
-                    p.title,
-                    p.summary,
-                    p.background,
-                    p.category,
-                    p.complexity,
-                    json.dumps(p.resolution_hints, ensure_ascii=False),
-                    p.quality_flag,
-                    p.created_at.isoformat(),
-                    json.dumps(p.symptoms, ensure_ascii=False),
-                    json.dumps(p.root_cause, ensure_ascii=False),
-                    p.fault_domain,
-                    p.customer_impact,
-                    json.dumps(p.tags, ensure_ascii=False),
-                ),
-            )
+            conn.execute(_PROBLEM_INSERT_SQL, _problem_params(p))
 
     async def acreate(self, adb: AsyncDatabase, p: ProblemRecord) -> None:
         async with adb.connect() as conn:
-            await conn.execute(
-                """
-                INSERT OR IGNORE INTO problems
-                  (id, run_id, title, summary, background, category,
-                   complexity, resolution_hints_json, quality_flag, created_at,
-                   symptoms_json, root_cause_json, fault_domain, customer_impact, tags_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    p.id,
-                    p.run_id,
-                    p.title,
-                    p.summary,
-                    p.background,
-                    p.category,
-                    p.complexity,
-                    json.dumps(p.resolution_hints, ensure_ascii=False),
-                    p.quality_flag,
-                    p.created_at.isoformat(),
-                    json.dumps(p.symptoms, ensure_ascii=False),
-                    json.dumps(p.root_cause, ensure_ascii=False),
-                    p.fault_domain,
-                    p.customer_impact,
-                    json.dumps(p.tags, ensure_ascii=False),
-                ),
-            )
+            await conn.execute(_PROBLEM_INSERT_SQL, _problem_params(p))
 
     def list_for_run(self, run_id: str) -> list[ProblemRecord]:
         with self.db.connect() as conn:
@@ -441,6 +427,8 @@ def _row_to_problem(r: sqlite3.Row) -> ProblemRecord:
     tags = json.loads(r["tags_json"]) if "tags_json" in keys else []
     fault_domain = r["fault_domain"] if "fault_domain" in keys else "software"
     customer_impact = r["customer_impact"] if "customer_impact" in keys else "degraded"
+    plan_json = r["diagnosis_plan_json"] if "diagnosis_plan_json" in keys else None
+    viable_json = r["viable_outcomes_json"] if "viable_outcomes_json" in keys else None
     return ProblemRecord(
         id=r["id"],
         run_id=r["run_id"],
@@ -457,6 +445,8 @@ def _row_to_problem(r: sqlite3.Row) -> ProblemRecord:
         fault_domain=fault_domain,
         customer_impact=customer_impact,
         tags=tags,
+        diagnosis_plan=json.loads(plan_json) if plan_json else None,
+        viable_outcomes=json.loads(viable_json) if viable_json else [],
     )
 
 
@@ -579,6 +569,13 @@ class ResolutionRecord:
     case_uid: str | None = None
     round_index: int = 1
     round_count: int = 1
+    # Honest outcome (csfd.outcomes): the state the contact left the problem in and
+    # how the contact ended, each next to what was planned, plus the promises made.
+    problem_state: str | None = None
+    planned_problem_state: str | None = None
+    contact_ending: str | None = None
+    planned_contact_ending: str | None = None
+    commitments: list[dict[str, Any]] = dataclasses_field(default_factory=list)
 
 
 def _resolution_params(r: ResolutionRecord) -> tuple[Any, ...]:
@@ -602,6 +599,11 @@ def _resolution_params(r: ResolutionRecord) -> tuple[Any, ...]:
         r.case_uid,
         r.round_index,
         r.round_count,
+        r.problem_state,
+        r.planned_problem_state,
+        r.contact_ending,
+        r.planned_contact_ending,
+        json.dumps(r.commitments, ensure_ascii=False),
     )
 
 
@@ -610,8 +612,10 @@ _RESOLUTION_INSERT_SQL = """
       (resolution_uid, run_id, incoming_request_id, problem_id,
        ticket_type, turns_json, turn_count, resolved,
        quality_flag, created_at, channel, agent_name, end_reason,
-       started_at, ended_at, duration_s, case_uid, round_index, round_count)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       started_at, ended_at, duration_s, case_uid, round_index, round_count,
+       problem_state, planned_problem_state, contact_ending, planned_contact_ending,
+       commitments_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
@@ -672,6 +676,10 @@ class LineageRecord:
     created_at: datetime
     # The case's seeded facts (csfd.facts.CaseFacts as a dict), part of its ground truth.
     case_facts: dict[str, Any] | None = None
+    # The state the case is planned to end in (csfd.outcomes.ProblemState).
+    problem_state: str | None = None
+    # The planned course per contact: end mode, planned ending, diagnosis beat.
+    case_plan: dict[str, Any] | None = None
 
 
 class LineageRepo:
@@ -685,8 +693,9 @@ class LineageRepo:
                 INSERT OR IGNORE INTO lineage
                   (ticket_uid, run_id, slot_index, problem_id, ticket_type,
                    customer_tier, customer_tone, incoming_request_id,
-                   resolution_id, created_at, case_facts_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   resolution_id, created_at, case_facts_json, problem_state,
+                   case_plan_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     r.ticket_uid,
@@ -700,6 +709,8 @@ class LineageRepo:
                     r.resolution_id,
                     r.created_at.isoformat(),
                     json.dumps(r.case_facts) if r.case_facts is not None else None,
+                    r.problem_state,
+                    json.dumps(r.case_plan) if r.case_plan is not None else None,
                 ),
             )
 
@@ -734,8 +745,9 @@ class LineageRepo:
                 INSERT OR IGNORE INTO lineage
                   (ticket_uid, run_id, slot_index, problem_id, ticket_type,
                    customer_tier, customer_tone, incoming_request_id,
-                   resolution_id, created_at, case_facts_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   resolution_id, created_at, case_facts_json, problem_state,
+                   case_plan_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     r.ticket_uid,
@@ -749,6 +761,8 @@ class LineageRepo:
                     r.resolution_id,
                     r.created_at.isoformat(),
                     json.dumps(r.case_facts) if r.case_facts is not None else None,
+                    r.problem_state,
+                    json.dumps(r.case_plan) if r.case_plan is not None else None,
                 ),
             )
 

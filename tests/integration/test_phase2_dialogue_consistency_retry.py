@@ -8,6 +8,7 @@ from pathlib import Path
 from csfd.agents.factory import AgentFactory
 from csfd.graph.phase2_graph import build_phase2_subgraph
 from csfd.models.fake import FakeChatModel
+from csfd.outcomes import ProblemState
 from csfd.pipeline import (
     ConsistencyVerdict,
     DialogueTurnOutput,
@@ -34,7 +35,7 @@ def _factory() -> AgentFactory:
             # First review fails (re-roll), second passes.
             ConsistencyVerdict: [
                 ConsistencyVerdict(status="fail", issues=["agent jumped to the fix too fast"]),
-                ConsistencyVerdict(status="pass"),
+                ConsistencyVerdict(status="pass", problem_state=ProblemState.FIXED_VERIFIED),
             ],
         },
     )

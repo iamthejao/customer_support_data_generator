@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast, get_args
@@ -10,6 +11,7 @@ from typing import cast, get_args
 import typer
 
 from csfd.agents.factory import AgentFactory
+from csfd.case_plan import CasePlan, load_case_plan
 from csfd.models.registry import build_llm
 from csfd.observability.logging import configure_logging
 from csfd.pipeline import run_pipeline
@@ -17,9 +19,11 @@ from csfd.prompts.registry import PromptRegistry
 from csfd.seeds.company import parse_company_seed
 from csfd.seeds.scenarios import parse_scenarios_seed
 from csfd.settings import (
+    AppSettings,
     Channel,
     Disfluency,
     HeaderStyle,
+    SeedsConfig,
     SpeakerStyle,
     TranscriptStyleConfig,
     load_settings,
@@ -87,22 +91,29 @@ ticket-type expectations.
 """
 
 
+_INIT_COMPANY = "my_company"
+
+
 @app.command()
 def init() -> None:
-    """Scaffold seeds/, data/, and an .env.example template in the current dir."""
-    Path("seeds").mkdir(exist_ok=True)
+    """Scaffold seeds/<company>/, data/, and an .env.example template in the current dir."""
+    company_dir = Path("seeds") / _INIT_COMPANY
+    company_dir.mkdir(parents=True, exist_ok=True)
     Path("data").mkdir(exist_ok=True)
     Path("data/exports").mkdir(exist_ok=True)
-    company = Path("seeds/company_seed.md")
+    company = company_dir / "company_seed.md"
     if not company.exists():
         company.write_text(_COMPANY_SEED_STUB, encoding="utf-8")
-    scenarios = Path("seeds/scenarios_seed.md")
+    scenarios = company_dir / "scenarios_seed.md"
     if not scenarios.exists():
         scenarios.write_text(_SCENARIOS_SEED_STUB, encoding="utf-8")
     env = Path(".env.example")
     if not env.exists():
         env.write_text(_DEFAULT_ENV, encoding="utf-8")
-    typer.echo("Initialized seeds/, data/, .env.example.")
+    typer.echo(
+        f"Initialized {company_dir}/, data/, .env.example. "
+        f"Select the seed with --company {_INIT_COMPANY} (or seeds.company in YAML)."
+    )
 
 
 def _with_current_schema(step: Callable[[Database], None], db: Database) -> None:
@@ -142,12 +153,20 @@ def _build_factory(profile: str | None) -> AgentFactory:
 
 
 def _resolve_seed_paths(
-    seeds_dir: str,
+    seeds: SeedsConfig,
     company_seed: str | None,
     scenarios_seed: str | None,
 ) -> tuple[Path, Path]:
-    company = Path(company_seed) if company_seed else Path(seeds_dir) / "company_seed.md"
-    scenarios = Path(scenarios_seed) if scenarios_seed else Path(seeds_dir) / "scenarios_seed.md"
+    """Seed files of the configured company; explicit file paths win."""
+    company = Path(company_seed) if company_seed else seeds.company_path()
+    scenarios = Path(scenarios_seed) if scenarios_seed else seeds.scenarios_path()
+    for path, flag in ((company, "--company-seed"), (scenarios, "--scenarios-seed")):
+        if not path.exists():
+            raise typer.BadParameter(
+                f"seed file not found: {path}. Pick a company under {seeds.dir}/ with "
+                f"--company, or pass the file with {flag}.",
+                param_hint=flag,
+            )
     return company, scenarios
 
 
@@ -165,7 +184,15 @@ def generate(
     seed: int | None = typer.Option(None, "--seed"),
     problems: int | None = typer.Option(None, "--problems"),
     tickets: int | None = typer.Option(None, "--tickets"),
-    seeds_dir: str = typer.Option("seeds", "--seeds-dir"),
+    company: str | None = typer.Option(
+        None,
+        "--company",
+        help="Company seed: the folder under --seeds-dir holding company_seed.md and "
+        "scenarios_seed.md (shipped: kalvora, norrholt). Overrides seeds.company.",
+    ),
+    seeds_dir: str | None = typer.Option(
+        None, "--seeds-dir", help="Folder of company seeds. Overrides seeds.dir."
+    ),
     company_seed: str | None = typer.Option(None, "--company-seed"),
     scenarios_seed: str | None = typer.Option(None, "--scenarios-seed"),
     channel: str | None = typer.Option(
@@ -178,6 +205,20 @@ def generate(
         None,
         "--disfluency",
         help="Phone speech style: none | light | moderate. Overrides tickets.phone.disfluency.",
+    ),
+    plan: str | None = typer.Option(
+        None,
+        "--plan",
+        help="Case-plan YAML: one entry per case pinning its problem, ticket type, tier, "
+        "tone, contacts, end modes or problem state; the rest comes from the proportions. "
+        "The number of entries sets the number of cases.",
+    ),
+    problems_from: str | None = typer.Option(
+        None,
+        "--problems-from",
+        help="Reuse the committed problems of an earlier run (same database) instead of "
+        "generating new ones: Phase 1 is skipped and the run is stored as phase2 with that "
+        "parent run id. Use it to render the same problems again, e.g. in another channel.",
     ),
     rounds: int | None = typer.Option(
         None,
@@ -213,26 +254,77 @@ def generate(
         settings.tickets.phone.disfluency = disfluency_choice
     if rounds is not None:
         settings.tickets.rounds.proportions = {rounds: 1.0}
+    if company is not None:
+        settings.seeds.company = company
+    if seeds_dir is not None:
+        settings.seeds.dir = seeds_dir
     factory = _build_factory(profile)
     db = Database(path=Path(settings.storage.sqlite_path))
     _with_current_schema(apply_migrations, db)
+    problem_ids = _reused_problem_ids(db, problems_from, settings) if problems_from else None
+    case_plan = _load_plan(Path(plan), problem_ids, settings) if plan else None
     company_path, scenarios_path = _resolve_seed_paths(
-        seeds_dir,
+        settings.seeds,
         company_seed,
         scenarios_seed,
     )
-    company = parse_company_seed(company_path)
-    scenarios = parse_scenarios_seed(scenarios_path)
     run_id = asyncio.run(
         run_pipeline(
             settings=settings,
             factory=factory,
             db=db,
-            company=company,
-            scenarios=scenarios,
+            company=parse_company_seed(company_path),
+            scenarios=parse_scenarios_seed(scenarios_path),
+            case_plan=case_plan,
+            problems_from=problems_from,
         )
     )
     typer.echo(run_id)
+
+
+def _reused_problem_ids(db: Database, run_id: str, settings: AppSettings) -> list[str]:
+    """Problem ids of the run ``--problems-from`` names, after checking it fits this run."""
+    try:
+        run = RunRepo(db).get(run_id)
+    except KeyError as exc:
+        raise typer.BadParameter(
+            f"no run {run_id!r} in {db.path}", param_hint="--problems-from"
+        ) from exc
+    seed = (json.loads(run.config_snapshot_json).get("company") or {}).get("seed")
+    if seed is not None and seed != settings.seeds.company:
+        raise typer.BadParameter(
+            f"run {run_id} was generated for company {seed!r}, not {settings.seeds.company!r}; "
+            f"pass --company {seed}",
+            param_hint="--problems-from",
+        )
+    ids = [p.id for p in ProblemRepo(db).list_for_run(run_id)]
+    if not ids:
+        raise typer.BadParameter(
+            f"run {run_id} has no committed problems", param_hint="--problems-from"
+        )
+    return ids
+
+
+def _load_plan(path: Path, problem_ids: list[str] | None, settings: AppSettings) -> CasePlan:
+    """Read the case plan, check its problem pins, and size the run to it."""
+    try:
+        case_plan = load_case_plan(path)
+        if problem_ids is not None:
+            case_plan.check_problems(problem_ids)
+        else:
+            # Fresh problems get their ids during the run, so only indices can be pinned.
+            placeholder = [f"#{i}" for i in range(settings.problem_database.count)]
+            for entry in case_plan.cases:
+                if isinstance(entry.problem, str):
+                    raise ValueError(
+                        f"case plan pins problem {entry.problem!r} by id; ids only exist for "
+                        "reused problems (--problems-from), so pin an index instead"
+                    )
+                case_plan.problem_id(entry, placeholder)
+    except (OSError, ValueError) as exc:  # pydantic's ValidationError is a ValueError
+        raise typer.BadParameter(str(exc), param_hint="--plan") from exc
+    settings.tickets.total = len(case_plan.cases)
+    return case_plan
 
 
 def _transcript_style(profile: str | None) -> TranscriptStyleConfig:

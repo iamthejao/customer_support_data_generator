@@ -11,7 +11,7 @@ def _case(channel: str = "phone", facts: dict[str, Any] | None = None) -> tuple[
         sequence=1,
         count=2,
         channel=channel,
-        reason="Chiller alarm",
+        reason="Furnace alarm",
         customer_name="Customer-standard-0001",
         agent_name="Agent-l2-0001",
         agent_role="L2 Support",
@@ -23,8 +23,8 @@ def _case(channel: str = "phone", facts: dict[str, Any] | None = None) -> tuple[
         resolved=False,
         quality_flag=None,
         turns=[
-            {"speaker": "agent", "content": "CoolTherm support.", "start_s": 0.0},
-            {"speaker": "customer", "content": "Our CT-500 alarms.", "start_s": 6.0},
+            {"speaker": "agent", "content": "Kalvora support.", "start_s": 0.0},
+            {"speaker": "customer", "content": "Our CF-600 alarms.", "start_s": 6.0},
         ],
     )
     case = Case(
@@ -37,7 +37,7 @@ def _case(channel: str = "phone", facts: dict[str, Any] | None = None) -> tuple[
         customer_tone="neutral",
         channel=channel,
         customer_name="Customer-standard-0001",
-        company_name="CoolTherm",
+        company_name="Kalvora",
         facts=facts,
         contacts=[contact],
     )
@@ -54,8 +54,8 @@ def test_defaults_keep_the_csfd_layout() -> None:
     assert text.startswith("CALL TRANSCRIPT\ncase_id: 429417d7-9b94-4f08:000001\n")
     assert "channel: phone (inbound)" in text
     assert _body(text) == [
-        "[00:00:00] AGENT: CoolTherm support.",
-        "[00:00:06] CUSTOMER: Our CT-500 alarms.",
+        "[00:00:00] AGENT: Kalvora support.",
+        "[00:00:06] CUSTOMER: Our CF-600 alarms.",
     ]
 
 
@@ -63,8 +63,8 @@ def test_title_speaker_style() -> None:
     case, contact = _case()
     lines = _body(render_transcript(case, contact, speaker_style="title"))
     assert lines == [
-        "[00:00:00] Agent: CoolTherm support.",
-        "[00:00:06] Customer: Our CT-500 alarms.",
+        "[00:00:00] Agent: Kalvora support.",
+        "[00:00:06] Customer: Our CF-600 alarms.",
     ]
 
 
@@ -72,15 +72,15 @@ def test_role_speaker_style_uses_the_caller_role() -> None:
     case, contact = _case(facts={"caller_role": "maintenance technician"})
     lines = _body(render_transcript(case, contact, speaker_style="role", timestamps=False))
     assert lines == [
-        "Agent: CoolTherm support.",
-        "Caller (maintenance technician): Our CT-500 alarms.",
+        "Agent: Kalvora support.",
+        "Caller (maintenance technician): Our CF-600 alarms.",
     ]
 
 
 def test_role_speaker_style_without_facts_falls_back_to_caller() -> None:
     case, contact = _case()
     lines = _body(render_transcript(case, contact, speaker_style="role", timestamps=False))
-    assert lines[1] == "Caller: Our CT-500 alarms."
+    assert lines[1] == "Caller: Our CF-600 alarms."
 
 
 def test_wissant_header_is_a_metadata_block() -> None:
@@ -90,7 +90,7 @@ def test_wissant_header_is_a_metadata_block() -> None:
         "call_id: CSFD-429417D7-1-1",
         "call_date: 2026-01-22",
         "---",
-        "[00:00:00] Agent: CoolTherm support.",
+        "[00:00:00] Agent: Kalvora support.",
     ]
     assert "phone (inbound)" not in text and "duration" not in text
 
@@ -98,7 +98,7 @@ def test_wissant_header_is_a_metadata_block() -> None:
 def test_no_header() -> None:
     case, contact = _case()
     text = render_transcript(case, contact, header_style="none")
-    assert text.splitlines()[0] == "[00:00:00] AGENT: CoolTherm support."
+    assert text.splitlines()[0] == "[00:00:00] AGENT: Kalvora support."
 
 
 def test_email_styles_touch_only_the_header() -> None:
@@ -114,6 +114,6 @@ def test_email_styles_touch_only_the_header() -> None:
 
 
 def test_case_payload_carries_the_facts() -> None:
-    facts = {"asset_model": "CT-500", "asset_serial": "CT500-0862-YR"}
+    facts = {"asset_model": "CF-600", "asset_serial": "CF600-0862-YR"}
     case, _ = _case(facts=facts)
     assert case_payload(case)["case_facts"] == facts

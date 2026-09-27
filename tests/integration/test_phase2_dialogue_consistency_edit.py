@@ -8,9 +8,11 @@ from pathlib import Path
 from csfd.agents.factory import AgentFactory
 from csfd.graph.phase2_graph import build_phase2_subgraph
 from csfd.models.fake import FakeChatModel
+from csfd.outcomes import ProblemState
 from csfd.pipeline import (
     ConsistencyVerdict,
     DialogueTurnOutput,
+    EditedTurn,
     IncomingRequestOutput,
 )
 from tests.integration import _dialogue_harness as h
@@ -36,7 +38,8 @@ def _factory() -> AgentFactory:
                 issues=["smoothed wording"],
                 edited_subject="Power cycling resolved",
                 edited_body="It power-cycles.",
-                edited_turns=_EDITED,
+                edited_turns=[EditedTurn(**t.model_dump()) for t in _EDITED],
+                problem_state=ProblemState.FIXED_VERIFIED,
             ),
         },
         structured_seq={
