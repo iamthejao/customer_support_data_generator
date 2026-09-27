@@ -29,8 +29,12 @@ def _turns() -> list[DialogueTurnOutput]:
         DialogueTurnOutput(speaker="agent", content="Could you wiggle the PSU plug?"),
         DialogueTurnOutput(speaker="customer", content="The display flickers when it moves."),
         DialogueTurnOutput(
+            speaker="agent", content="That points to the connector.", diagnosis_done=True
+        ),
+        DialogueTurnOutput(speaker="customer", content="So what now?"),
+        DialogueTurnOutput(
             speaker="agent",
-            content="That points to the connector. I'll ship a new PSU cable for tomorrow.",
+            content="I'll ship a new PSU cable for tomorrow.",
             done=True,
             done_reason="follow_up",
             commitments=[_PART],
@@ -81,9 +85,12 @@ def test_agent_is_given_the_guide_not_the_root_cause(tmp_path: Path) -> None:
     assert "Wiggle the PSU plug at the back of the unit" in agent_text
     assert "the display flickers" not in agent_text  # a finding only the customer has
     assert "root_cause" not in agent_text and "resolution_hint" not in agent_text
-    assert agent["planned"]["problem_state"] == "pending_part"
+    # The planned outcome is hidden until the agent reports the diagnosis done.
+    agents = _trace_inputs(db, "agent_turn_generator")
+    assert [a["planned"].get("problem_state") for a in agents] == [None, None, "pending_part"]
+    assert agent["planned"] == {"final": True, "revealed": False}
 
-    [customer] = _trace_inputs(db, "customer_turn_generator")
+    customer = _trace_inputs(db, "customer_turn_generator")[0]
     findings = customer["diagnosis"]["findings"]
     assert [f["finding"] for f in findings] == [
         "the lamp stays steady",
@@ -117,8 +124,10 @@ def test_a_dialogue_that_misses_the_planned_state_is_rerolled(tmp_path: Path) ->
         ],
     )
     assert h.trace_count(db, node_name="conversation_consistency_check") == 2
-    retry_agent = _trace_inputs(db, "agent_turn_generator")[-1]
-    assert any("'pending_part'" in i for i in retry_agent["prior_issues"])
+    agents = _trace_inputs(db, "agent_turn_generator")
+    # On the re-roll the outcome issue stays hidden until the diagnosis is done.
+    assert not any("'pending_part'" in i for i in agents[3]["prior_issues"])
+    assert any("'pending_part'" in i for i in agents[-1]["prior_issues"])
     assert _row(db)["problem_state"] == "pending_part"
 
 

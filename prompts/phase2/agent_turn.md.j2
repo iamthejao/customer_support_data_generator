@@ -55,26 +55,28 @@ Plan for this contact (follow it; the customer does not know it):
 {%- elif inputs.guide %}
 - There is no new check to run in this contact.
 {%- endif %}
-{%- if not inputs.planned.final and inputs.planned.ending == "dropped" %}
+{%- if not inputs.planned.revealed %}
+- You will be told how this contact ends once the diagnosis is done. Until then, only diagnose. On the turn where the customer has reported the results of this contact's checks and you say what they show, set `diagnosis_done=true` and keep `done=false`.
+{%- elif not inputs.planned.final and inputs.planned.ending == "dropped" %}
 - This contact is cut off before a conclusion. Keep working the problem step by step; do not wrap up and do not set `done=true`.
 {%- elif not inputs.planned.final %}
 - Do not name a cause as confirmed and do not declare anything fixed.{% if inputs.guide and inputs.guide.next_step %} Then agree that the customer runs check {{ inputs.guide.next_step }} ({{ inputs.guide.checks[inputs.guide.next_step - 1].check }}) in their own time and gets back to you with the result.{% else %} Then agree one concrete next step that needs time (a test the customer runs, monitoring the machine).{% endif %} Once it is agreed, end the contact with `done=true` and `done_reason="follow_up"`.
 {%- elif inputs.planned.problem_state == "fixed_verified" %}
-- When the checks confirm a cause, walk the customer through the guide's fix for that cause, then have them confirm it works. Once they confirm, close with `done=true` and `done_reason="resolved"`.
+- The diagnosis is done: walk the customer through the guide's fix for the cause the checks confirmed, then have them confirm it works. Once they confirm, close with `done=true` and `done_reason="resolved"`.
 {%- elif inputs.planned.problem_state == "fixed_unverified" %}
-- When the checks confirm a cause, walk the customer through the guide's fix for that cause. Its effect cannot be confirmed during this contact (it needs time or a production run): agree how the customer will confirm it, don't claim it is proven, and close with `done=true` and `done_reason="customer_satisfied"`.
+- The diagnosis is done: walk the customer through the guide's fix for the cause the checks confirmed. Its effect cannot be confirmed during this contact (it needs time or a production run): agree how the customer will confirm it, don't claim it is proven, and close with `done=true` and `done_reason="customer_satisfied"`.
 {%- elif inputs.planned.problem_state == "workaround" %}
-- When the checks confirm a cause, its permanent fix cannot be done right now. Give the guide's workaround for that cause so the customer can keep working, say clearly that the cause is not removed yet and what happens next, and close with `done=true` and `done_reason="customer_satisfied"`. Don't say the problem is fixed.
+- The diagnosis is done, but the permanent fix for the cause the checks confirmed cannot be done right now. Give the guide's workaround for that cause so the customer can keep working, say clearly that the cause is not removed yet and what happens next, and close with `done=true` and `done_reason="customer_satisfied"`. Don't say the problem is fixed.
 {%- elif inputs.planned.problem_state == "pending_visit" %}
-- When the checks confirm a cause, its fix cannot be completed in this contact: book a technician visit to carry it out (who and when), tell the customer what to do until then, and close with `done=true` and `done_reason="follow_up"`. Don't say the problem is fixed.
+- The diagnosis is done, but the fix for the cause the checks confirmed cannot be completed in this contact: book a technician visit to carry it out (who and when), tell the customer what to do until then, and close with `done=true` and `done_reason="follow_up"`. Don't say the problem is fixed.
 {%- elif inputs.planned.problem_state == "pending_part" %}
-- When the checks confirm a cause, its fix cannot be completed in this contact: arrange the part the guide lists for it (what, and when it arrives), explain how it gets fitted, and close with `done=true` and `done_reason="follow_up"`. Don't say the problem is fixed.
+- The diagnosis is done, but the fix for the cause the checks confirmed cannot be completed in this contact: arrange the part the guide lists for it (what, and when it arrives), explain how it gets fitted, and close with `done=true` and `done_reason="follow_up"`. Don't say the problem is fixed.
 {%- elif inputs.planned.problem_state == "pending_customer_test" %}
-- Do not name a cause as confirmed.{% if inputs.guide and inputs.guide.next_step %} After your checks, agree that the customer runs check {{ inputs.guide.next_step }} ({{ inputs.guide.checks[inputs.guide.next_step - 1].check }}) in their own time and reports back.{% else %} Agree a test the customer runs in their own time and reports back.{% endif %} Close with `done=true` and `done_reason="follow_up"`.
+- Do not name a cause as confirmed.{% if inputs.guide and inputs.guide.next_step %} Agree that the customer runs check {{ inputs.guide.next_step }} ({{ inputs.guide.checks[inputs.guide.next_step - 1].check }}) in their own time and reports back.{% else %} Agree a test the customer runs in their own time and reports back.{% endif %} Close with `done=true` and `done_reason="follow_up"`.
 {%- elif inputs.planned.problem_state == "escalated_open" %}
-- After this contact's checks, escalate to the next support tier or engineering, tell the customer who will contact them and when, and close with `done=true` and `done_reason="escalation"`. Don't present any cause as confirmed or the problem as fixed.
+- The checks did not settle it at your level: escalate to the next support tier or engineering, tell the customer who will contact them and when, and close with `done=true` and `done_reason="escalation"`. Don't present any cause as confirmed or the problem as fixed.
 {%- elif inputs.planned.problem_state == "not_a_fault" %}
-- When the checks confirm a cause, walk the customer through the guide's steps and prevention advice for that cause, then close with `done=true` and `done_reason="customer_satisfied"`.
+- The diagnosis is done: walk the customer through the guide's steps and prevention advice for the cause the checks confirmed, then close with `done=true` and `done_reason="customer_satisfied"`.
 {%- elif inputs.planned.problem_state == "abandoned" %}
 - Keep diagnosing patiently, one check at a time. The customer may lose patience before you get to the cause; if they give up, acknowledge it politely and leave the door open, but leave ending the contact to them (keep `done=false`). Never claim a cause or a fix you have not reached.
 {%- endif %}
@@ -117,3 +119,4 @@ Output contract — return one turn:
 - `done`: boolean (see above).
 - `done_reason`: short tag when done, else null.
 - `commitments`: promises you make in this turn, each `{who, what, due}` — `who` is "agent" or whoever will act (e.g. "field technician"), `what` the action, `due` the time as you said it (or null). An empty list if you promise nothing. They are not shown in the transcript; record exactly what your words promise.
+- `diagnosis_done`: see the plan for this contact (false otherwise).

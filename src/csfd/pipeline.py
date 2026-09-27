@@ -84,6 +84,9 @@ class DialogueTurnOutput(BaseModel):
     # Promises made in this turn, recorded by the speaker who made them. Never
     # rendered into the transcript; the consistency check verifies them against it.
     commitments: list[Commitment] = Field(default_factory=list)
+    # Set by the agent on the turn where it has this contact's check results; the
+    # loop then reveals how the contact is planned to end. Never rendered.
+    diagnosis_done: bool = False
 
 
 class IncomingRequestOutput(BaseModel):

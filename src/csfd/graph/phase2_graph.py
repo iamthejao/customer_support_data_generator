@@ -259,18 +259,26 @@ def _contact_beat(
 ) -> tuple[ContactBeat | None, list[int]]:
     """This contact's beat and the plan checks already run, from how earlier contacts ended.
 
-    An earlier contact's checks count as run only if it ended with its agreed
-    next step; otherwise (cut off, capped, broken off) they move into this contact.
+    Earlier contacts are walked in order with the checks still pending: one that
+    ended with its agreed next step ran the pending checks and its own; any other
+    (cut off, capped, broken off) leaves its checks pending. The pending checks
+    move into this contact, unless it is a planned drop that reports no results.
     """
     if rnd.beat is None:
         return None, []
     ended = {c.sequence: _ended_label(c) for c in state.case_history}
     done: list[int] = []
-    carried: list[int] = []
+    pending: list[int] = []
     for r in slot.rounds:
-        if r.sequence < rnd.sequence and r.beat:
-            (done if ended.get(r.sequence) == "follow_up" else carried).extend(r.beat.checks)
-    return rnd.beat.model_copy(update={"checks": [*carried, *rnd.beat.checks]}), done
+        if r.sequence >= rnd.sequence or r.beat is None:
+            continue
+        pending.extend(r.beat.checks)
+        if ended.get(r.sequence) == "follow_up":
+            done.extend(pending)
+            pending = []
+    if rnd.end_mode == "dropped":
+        pending = []
+    return rnd.beat.model_copy(update={"checks": [*pending, *rnd.beat.checks]}), done
 
 
 def _planned_contact(slot: _PlanSlot, rnd: _RoundSpec) -> dict[str, Any] | None:
@@ -283,6 +291,29 @@ def _planned_contact(slot: _PlanSlot, rnd: _RoundSpec) -> dict[str, Any] | None:
         "cause_confirmed": rnd.beat.cause_confirmed,
         "final": rnd.sequence == rnd.count,
     }
+
+
+def _agent_plan(
+    state: PipelineState, slot: _PlanSlot, rnd: _RoundSpec, beat: ContactBeat | None
+) -> dict[str, Any] | None:
+    """The contact's plan as the agent sees it: the ending only once the diagnosis is done.
+
+    The agent diagnoses without knowing how the case ends, so the planned state
+    cannot point it to a cause. The ending is revealed once an agent turn has
+    reported the diagnosis done (``diagnosis_done``), or straight away when this
+    contact has no checks to run.
+    """
+    planned = _planned_contact(slot, rnd)
+    if planned is None:
+        return None
+    revealed = (
+        beat is None
+        or not beat.checks
+        or any(t.diagnosis_done for t in state.current_dialogue_turns if t.speaker == "agent")
+    )
+    if not revealed:
+        return {"final": planned["final"], "revealed": False}
+    return {**planned, "revealed": True}
 
 
 def _agreed_test(
@@ -352,7 +383,7 @@ def _agent_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
         "ticket_type": slot.ticket_type.value,
         "agent_name": _agent_name(slot),
         "guide": guide,
-        "planned": _planned_contact(slot, rnd),
+        "planned": _agent_plan(state, slot, rnd, beat),
         "facts": crm_view(slot.facts) if slot.facts else None,
         "turn_cap": _effective_turn_cap(state),
         **_round_inputs(state, rnd),
@@ -616,8 +647,14 @@ async def _generate_turn(
         inputs["disfluency"] = settings.tickets.phone.disfluency
     # On a re-roll, surface the prior consistency issues to the agent so it can
     # avoid repeating them. Only the agent turn receives them (it drives diagnosis).
+    # Before the ending is revealed, outcome issues would give the planned state away.
+    hidden = speaker == "agent" and not (inputs.get("planned") or {}).get("revealed", True)
     prior_issues = (
-        [i.explanation for i in state.last_verdict.issues]
+        [
+            i.explanation
+            for i in state.last_verdict.issues
+            if not (hidden and i.rule_violated == _OUTCOME_RULE)
+        ]
         if (speaker == "agent" and state.last_verdict is not None and not state.last_verdict.passed)
         else []
     )

@@ -199,6 +199,7 @@ def test_agent_turn_renders_the_guide_not_the_root_cause(registry: PromptRegistr
                 "ending": "agreed_next_step",
                 "cause_confirmed": False,
                 "final": False,
+                "revealed": True,
             },
         },
         prior_issues=[],
@@ -220,6 +221,7 @@ def test_agent_turn_renders_the_guide_not_the_root_cause(registry: PromptRegistr
                 "ending": "customer_satisfied",
                 "cause_confirmed": True,
                 "final": True,
+                "revealed": True,
             },
         },
         prior_issues=[],
@@ -227,6 +229,17 @@ def test_agent_turn_renders_the_guide_not_the_root_cause(registry: PromptRegistr
     assert "Reseat the PSU connector until it clicks" in final
     assert "How to confirm the fix worked: Run the unit for an hour" in final
     assert 'done_reason="resolved"' in final
+    # Before the diagnosis is done, the agent is not told how the contact ends.
+    hidden = handle.template.render(
+        inputs={
+            **inputs,
+            "guide": _guide(ProblemState.PENDING_PART, checks=[0, 1], cause_confirmed=True),
+            "planned": {"final": True, "revealed": False},
+        },
+        prior_issues=[],
+    )
+    assert "set `diagnosis_done=true`" in hidden
+    assert "part" not in hidden.split("Plan for this contact")[1].split("Conversation so far")[0]
 
 
 def test_customer_turn_renders_findings_and_planned_ending(registry: PromptRegistry) -> None:
