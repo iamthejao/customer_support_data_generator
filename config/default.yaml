@@ -13,11 +13,10 @@ seeds:
   company: kalvora
 
 # Two agent buckets drive every LLM call in the pipeline:
-#   - generator         : problem brainstorm + resolution generator
-#   - combined_checker  : phase 1 + phase 2 quality checkers
-# Node-name fallbacks in `csfd.agents.factory._ROLE_FALLBACK` route specific
-# node names (e.g. resolution_generator, combined_problem_check) to these
-# buckets.
+#   - generator         : problems, customer openings, and both dialogue speakers
+#   - combined_checker  : Phase 1 problem check + Phase 2 conversation consistency check
+# `csfd.agents.factory._ROLE_FALLBACK` maps each node name (e.g. agent_turn_generator,
+# conversation_consistency_check) to one of these buckets.
 agents:
   generator:
     provider: anthropic
@@ -113,6 +112,9 @@ storage:
     speaker_style: upper   # upper (AGENT:) | title (Agent:) | role (Agent: / Caller (<job role>):)
     header_style: csfd     # csfd (full key: value header) | wissant (call_id/call_date + ---) | none
 
+# Phase 1 near-duplicate rejection: a problem whose embedding has cosine >= threshold
+# to one already committed in the run is regenerated. Needs an OpenAI-compatible
+# embeddings endpoint (local Ollama by default); set enabled: false without one.
 embedding:
   enabled: true
   provider: openai_compat

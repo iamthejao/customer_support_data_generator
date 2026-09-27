@@ -17,8 +17,8 @@ replied to) for email. Addresses use reserved ``.example`` domains. Ground
 truth (root cause, resolution hints) is deliberately not written here; join
 ``case.json``'s ``problem_id`` against ``problems.jsonl``. ``case.json`` does
 carry the case's seeded facts (machine, site, caller role; see csfd.facts) and
-its honest outcome: the problem state each contact left the case in, how it
-ended, and the commitments made, each next to what was planned (csfd.outcomes).
+its honest outcome: the problem state each contact left the case in and how it
+ended, each next to what was planned, and the commitments made (csfd.outcomes).
 
 Two options change the text layout for downstream parsers (defaults keep the
 format above):

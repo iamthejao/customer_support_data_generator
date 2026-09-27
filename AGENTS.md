@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This is a Python package named `csfd` using a `src/` layout. Core code lives in `src/csfd/`, with major areas split into `agents/`, `graph/`, `models/`, `storage/`, `budget/`, and `utils/`. The LangGraph pipeline lives in `src/csfd/graph/`: `pipeline_graph.py` (parent + `PipelineState`), `phase1_graph.py` (Problem Database subgraph), `phase2_graph.py` (Resolution subgraph), `studio.py` (Studio entry-point), `checkpointer.py` (async SQLite saver). CLI entry points are in `src/csfd/cli.py`. Prompt templates are in `prompts/`, seed inputs in `seeds/`, configuration in `config/`, and the SQLite schema in `src/csfd/storage/migrations/schema.sql`. Tests are split into `tests/unit/` and `tests/integration/`.
+This is a Python package named `csfd` using a `src/` layout; code lives in `src/csfd/` and the CLI in `src/csfd/cli.py`. The LangGraph pipeline is in `src/csfd/graph/`: `pipeline_graph.py` (parent + `PipelineState`), `phase1_graph.py` (Problem Database), `phase2_graph.py` (dialogues). Prompt templates (Jinja) are in `prompts/`, company seeds in `seeds/<company>/`, configuration in `config/` (`default.yaml` plus `profiles/`), and the SQLite schema in `src/csfd/storage/migrations/schema.sql` (not upgraded in place: recreate `data/runs.sqlite` after a schema change). `README.md` owns the user-facing behaviour. Tests are split into `tests/unit/` and `tests/integration/`.
 
 ## Build, Test, and Development Commands
 
@@ -12,8 +12,8 @@ This is a Python package named `csfd` using a `src/` layout. Core code lives in 
 - `uv run ruff check src tests`: lint Python code.
 - `uv run ruff format src tests`: format Python code with the project formatter.
 - `uv run mypy src tests`: run strict type checking.
-- `uv run csfd db-migrate`: apply the schema to the local SQLite database.
-- `uv run csfd generate --seed 42 --problems 10`: run the two-phase fake-data pipeline locally.
+- `uv run csfd --help` (and `csfd <command> --help`): list commands and options.
+- `uv run csfd generate --profile dev --seed 42`: small real run. It calls the configured models; only `dev` disables embedding dedup, which otherwise needs a local Ollama.
 
 ## Coding Style & Naming Conventions
 
