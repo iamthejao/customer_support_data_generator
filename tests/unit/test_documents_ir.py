@@ -109,7 +109,6 @@ def test_ir_round_trips_through_json() -> None:
     assert again.section("sec-6.2").covers == ["temperature calibration drift"]
 
 
-
 def test_section_ids_must_fit_a_word_bookmark() -> None:
     with pytest.raises(ValidationError, match="too long for a Word bookmark"):
         _doc(sections=[Section(id="sec-" + "1" * 40, number="1", title="Long")])
