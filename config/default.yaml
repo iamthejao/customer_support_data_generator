@@ -116,12 +116,11 @@ storage:
 # run by `csfd documents <run_id>` and rendered by `csfd export --format documents`.
 # Off by default; enable in a profile. `builders` names the document builders to
 # run (none ship yet). Markdown and JSON sidecars are always written; `formats`
-# adds Word and/or PDF. `pdf_standard`: ua-1 (accessible, tagged) | a-2b (archive) | none.
+# adds Word and/or PDF (tagged PDF/UA-1).
 documents:
   enabled: false
   builders: []
   formats: [docx, pdf]
-  pdf_standard: ua-1
 
 # Phase 1 near-duplicate rejection: a problem whose embedding has cosine >= threshold
 # to one already committed in the run is regenerated. Needs an OpenAI-compatible

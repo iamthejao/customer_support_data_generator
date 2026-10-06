@@ -28,7 +28,7 @@ from csfd.documents.rag import Query, write_rag_files
 from csfd.documents.render_docx import render_docx
 from csfd.documents.render_pdf import render_pdf
 from csfd.documents.sidecar import Chunk, chunks, render_markdown, sidecar
-from csfd.settings import DocumentFormat, PdfStandard
+from csfd.settings import DocumentFormat
 from csfd.storage.db import Database
 from csfd.storage.documents import DocumentRepo
 
@@ -71,7 +71,6 @@ def _export_document(
     assets: dict[str, Asset],
     folder: Path,
     formats: Sequence[DocumentFormat],
-    pdf_standard: PdfStandard,
 ) -> tuple[list[Path], list[Chunk], dict[str, str]]:
     written: list[Path] = []
     files: dict[str, str] = {}
@@ -93,7 +92,7 @@ def _export_document(
     if "docx" in formats:
         written.append(_write(folder / f"{stem}.docx", render_docx(doc, assets)))
     if "pdf" in formats:
-        pdf, pages = render_pdf(doc, assets, standard=pdf_standard)
+        pdf, pages = render_pdf(doc, assets)
         written.append(_write(folder / f"{stem}.pdf", pdf))
     written.append(
         _write(folder / f"{stem}.md", render_markdown(doc, figure_paths).encode("utf-8"))
@@ -114,7 +113,6 @@ def export_run_documents(
     *,
     out_dir: Path,
     formats: Sequence[DocumentFormat] = ("docx", "pdf"),
-    pdf_standard: PdfStandard = "ua-1",
 ) -> list[Path]:
     """Write ``<out_dir>/<run_id>/documents/``; returns the files written ([] without documents)."""
     repo = DocumentRepo(db)
@@ -131,7 +129,7 @@ def export_run_documents(
     exported: list[tuple[DocumentIR, list[Chunk]]] = []
     for doc in docs:
         folder = root / "docs" / doc.folder_name
-        paths, doc_chunks, files = _export_document(doc, assets, folder, formats, pdf_standard)
+        paths, doc_chunks, files = _export_document(doc, assets, folder, formats)
         written += paths
         exported.append((doc, doc_chunks))
         index_rows.append(

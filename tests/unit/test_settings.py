@@ -241,4 +241,3 @@ def test_documents_are_off_by_default_in_schema_and_shipped_config() -> None:
     shipped = load_settings(default_path="config/default.yaml", profile=None).documents
     assert shipped.enabled is False
     assert shipped.formats == ["docx", "pdf"]
-    assert shipped.pdf_standard == "ua-1"

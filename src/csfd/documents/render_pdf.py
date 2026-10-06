@@ -24,7 +24,6 @@ import typst
 
 from csfd.documents.figures import extension
 from csfd.documents.ir import Asset, DocumentIR
-from csfd.settings import PdfStandard
 
 _TEMPLATE = "document.typ"
 
@@ -35,9 +34,9 @@ def template_source() -> str:
 
 
 def render_pdf(
-    doc: DocumentIR, assets: Mapping[str, Asset], *, standard: PdfStandard = "ua-1"
+    doc: DocumentIR, assets: Mapping[str, Asset]
 ) -> tuple[bytes, dict[str, tuple[int, int]]]:
-    """The document as PDF bytes, and each section's (first, last) page."""
+    """The document as tagged PDF/UA-1 bytes, and each section's (first, last) page."""
     with tempfile.TemporaryDirectory(prefix="csfd-doc-") as tmp:
         root = Path(tmp)
         (root / _TEMPLATE).write_text(template_source(), encoding="utf-8")
@@ -57,7 +56,7 @@ def render_pdf(
         pdf = compiler.compile(
             format="pdf",
             timestamp=datetime.combine(doc.issue_date, time(0, 0), tzinfo=UTC),
-            pdf_standards=[] if standard == "none" else [standard],
+            pdf_standards=["ua-1"],
         )
         marks = json.loads(compiler.query("<secmark>", field="value"))
     assert isinstance(pdf, bytes)

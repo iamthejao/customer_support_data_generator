@@ -229,7 +229,6 @@ class TranscriptStyleConfig(BaseModel):
 
 
 DocumentFormat = Literal["docx", "pdf"]
-PdfStandard = Literal["none", "ua-1", "a-2b"]
 
 
 def _default_document_formats() -> list[DocumentFormat]:
@@ -242,14 +241,12 @@ class DocumentsConfig(BaseModel):
     Off by default: ``csfd documents <run_id>`` refuses to build unless
     ``enabled`` is true. ``builders`` names the document builders to run
     (``csfd.documents.build.BUILDERS``). ``formats`` are the files rendered
-    next to the always-written Markdown and JSON sidecars; ``pdf_standard`` is
-    the PDF profile (PDF/UA-1 accessibility, PDF/A-2b archiving, or none).
+    next to the always-written Markdown and JSON sidecars.
     """
 
     enabled: bool = False
     builders: list[str] = Field(default_factory=list)
     formats: list[DocumentFormat] = Field(default_factory=_default_document_formats)
-    pdf_standard: PdfStandard = "ua-1"
 
 
 class StorageConfig(BaseModel):

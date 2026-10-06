@@ -416,9 +416,7 @@ def export(
         )
     if "documents" in formats:
         docs = _documents_config(profile)
-        written = export_run_documents(
-            db, run_id, out_dir=out_dir, formats=docs.formats, pdf_standard=docs.pdf_standard
-        )
+        written = export_run_documents(db, run_id, out_dir=out_dir, formats=docs.formats)
         if not written and format == "documents":
             typer.echo(f"Run {run_id} has no documents; build them with `csfd documents {run_id}`.")
     typer.echo(f"Exported run {run_id} to {out_dir / run_id}.")

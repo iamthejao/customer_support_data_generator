@@ -124,14 +124,10 @@ def test_pdf_page_ranges_cover_every_section(
     assert all(1 <= first <= last <= count for first, last in pages.values())
 
 
-def test_pdf_bytes_are_reproducible_for_each_standard(
+def test_pdf_bytes_are_reproducible(
     pdf_render: tuple[bytes, dict[str, tuple[int, int]]],
 ) -> None:
     assert render_pdf(DOC, ASSETS)[0] == pdf_render[0]
-    archive, _ = render_pdf(DOC, ASSETS, standard="a-2b")
-    plain, _ = render_pdf(DOC, ASSETS, standard="none")
-    assert archive != plain
-    assert render_pdf(DOC, ASSETS, standard="a-2b")[0] == archive
 
 
 def test_svg_figures_become_png_for_docx() -> None:

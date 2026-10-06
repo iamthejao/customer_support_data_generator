@@ -57,7 +57,7 @@ Two invented companies ship (no real company, product or trademark names):
   - `tickets` — Phase 2: `total` cases (`--tickets`), `type_proportions`, `tier_proportions`, `tone_proportions_per_type`, `outcome_proportions`, `assignment_strategy` (`complexity_weighted` or `uniform`), `dialogue.turn_cap`, `channel` / `phone.disfluency` / `calendar` ([Conversation formats](#conversation-formats)), and `rounds` ([Multi-call cases](#multi-call-cases-rounds)). Conversation length is emergent; `dialogue.turn_cap` (default 20) is only a safety ceiling.
   - `validation` — whether the checker runs after each generation, and `max_retries`.
   - `storage` — SQLite and export paths, and the `transcripts` layout ([Transcript export](#transcript-export)).
-  - `documents` — [supporting documents](#supporting-documents-preview): `enabled` (default `false`), `builders`, `formats` (`docx`, `pdf`), `pdf_standard` (`ua-1`, `a-2b`, `none`).
+  - `documents` — [supporting documents](#supporting-documents-preview): `enabled` (default `false`), `builders`, `formats` (`docx`, `pdf`).
   - `embedding` — Phase 1 near-duplicate rejection. **On by default**: accepted problems are embedded through an OpenAI-compatible endpoint (local Ollama at `http://localhost:11434/v1`, model `embeddinggemma:300m`) and rejected when the cosine similarity to a problem already committed in the run is `>= threshold`. `text_template` is `title_summary`, `title_summary_background`, or `title_summary_symptoms_root_cause`. Without a reachable Ollama, set `enabled: false` or use `--profile dev`.
 - **`config/profiles/*.yaml`** — overlays merged on top via `--profile <name>` ([Configuration profiles](#configuration-profiles)).
 - **`.env`** — credentials and endpoints (`ANTHROPIC_API_KEY`, `LOCAL_BASE_URL`, …); see `.env.example`. Never recorded in the run.
@@ -388,7 +388,7 @@ data/exports/<run_id>/documents/
   index.jsonl                    # one line per document: ids, type, tier, revision, status, files + sha256
   docs/KD-SM-CF600-EN_revC/
     KD-SM-CF600-EN_revC.docx     # python-docx: real heading styles, captions, bookmarks, alt text, "Page X of Y"
-    KD-SM-CF600-EN_revC.pdf      # Typst: outline, tagged, PDF/UA-1 by default (documents.pdf_standard)
+    KD-SM-CF600-EN_revC.pdf      # Typst: outline, tagged, PDF/UA-1
     KD-SM-CF600-EN_revC.md       # Markdown sidecar, headings carry {#sec-6.2} anchors
     KD-SM-CF600-EN_revC.json     # IR + one chunk per section (text, heading path, PDF pages) + figures
     assets/fig-3-1.svg, .png
