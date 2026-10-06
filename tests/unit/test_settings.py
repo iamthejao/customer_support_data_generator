@@ -16,7 +16,7 @@ from textwrap import dedent
 
 import pytest
 
-from csfd.settings import EmbeddingConfig, load_settings
+from csfd.settings import DocumentsConfig, EmbeddingConfig, load_settings
 
 # ---- Synthetic YAML helpers --------------------------------------------------
 
@@ -232,3 +232,13 @@ def test_embedding_config_schema_default_is_disabled() -> None:
     assert embedding.threshold == pytest.approx(0.85)
     assert embedding.text_template == "title_summary"
     assert embedding.timeout_s == 30
+
+
+def test_documents_are_off_by_default_in_schema_and_shipped_config() -> None:
+    """Supporting documents stay off until a profile enables them."""
+    assert DocumentsConfig().enabled is False
+    assert DocumentsConfig().builders == []
+    shipped = load_settings(default_path="config/default.yaml", profile=None).documents
+    assert shipped.enabled is False
+    assert shipped.formats == ["docx", "pdf"]
+    assert shipped.pdf_standard == "ua-1"

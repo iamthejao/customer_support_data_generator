@@ -19,6 +19,7 @@ Each run writes these artifacts (file list under [Benchmark consumption](#benchm
 - **`lineage`** — one row per case linking its problem, request, and resolution, plus the case's seeded [facts](#case-facts) and plan.
 - **`agent_traces`** — one audit row per LLM call: prompt version, model, latency, checker verdict.
 - **`transcripts/`** — the conversations as plain-text email threads or call transcripts, one folder per case ([Conversation formats](#conversation-formats)).
+- **`documents/`** (preview, off by default) — supporting documents such as manuals and troubleshooting articles as Word and PDF files with machine-readable sidecars, plus retrieval-evaluation files ([Supporting documents](#supporting-documents-preview)).
 
 Show a system only `incoming_requests` (or the transcripts) for online-style evaluation; use `problems`, `lineage`, and the traces offline to explain each example.
 
@@ -56,6 +57,7 @@ Two invented companies ship (no real company, product or trademark names):
   - `tickets` — Phase 2: `total` cases (`--tickets`), `type_proportions`, `tier_proportions`, `tone_proportions_per_type`, `outcome_proportions`, `assignment_strategy` (`complexity_weighted` or `uniform`), `dialogue.turn_cap`, `channel` / `phone.disfluency` / `calendar` ([Conversation formats](#conversation-formats)), and `rounds` ([Multi-call cases](#multi-call-cases-rounds)). Conversation length is emergent; `dialogue.turn_cap` (default 20) is only a safety ceiling.
   - `validation` — whether the checker runs after each generation, and `max_retries`.
   - `storage` — SQLite and export paths, and the `transcripts` layout ([Transcript export](#transcript-export)).
+  - `documents` — [supporting documents](#supporting-documents-preview): `enabled` (default `false`), `builders`, `formats` (`docx`, `pdf`), `pdf_standard` (`ua-1`, `a-2b`, `none`).
   - `embedding` — Phase 1 near-duplicate rejection. **On by default**: accepted problems are embedded through an OpenAI-compatible endpoint (local Ollama at `http://localhost:11434/v1`, model `embeddinggemma:300m`) and rejected when the cosine similarity to a problem already committed in the run is `>= threshold`. `text_template` is `title_summary`, `title_summary_background`, or `title_summary_symptoms_root_cause`. Without a reachable Ollama, set `enabled: false` or use `--profile dev`.
 - **`config/profiles/*.yaml`** — overlays merged on top via `--profile <name>` ([Configuration profiles](#configuration-profiles)).
 - **`.env`** — credentials and endpoints (`ANTHROPIC_API_KEY`, `LOCAL_BASE_URL`, …); see `.env.example`. Never recorded in the run.
@@ -372,6 +374,35 @@ Storage:
 
 - `case.json` lists each contact's timing, `gap_since_previous_s`, `end_reason`, `problem_state` and `contact_ending` (each next to its planned value), `commitments`, and `resolved`. Feed a whole case folder to a consumer that builds one report from many calls.
 
+## Supporting documents (preview)
+
+Supporting documents are the manuals, troubleshooting articles, parts lists and similar files a support agent would look things up in. They are the document collection a future RAG system (one that searches documents, then answers from what it found) will retrieve from while resolving a case. This release ships the storage, rendering and export; the builders that write real documents come later, so a normal run produces no documents yet. The feature is **off by default** (`documents.enabled: false`).
+
+- **Build.** `csfd documents <run_id>` runs the builders named in `documents.builders` (`csfd.documents.build.BUILDERS`) over a finished run's problems and cases, and stores the documents and their retrieval links, replacing any earlier build of that run. It refuses to run unless a profile sets `documents.enabled: true`, and it calls no model itself.
+- **Model.** Each document is stored as a typed tree (`csfd.documents.ir.DocumentIR`): numbered sections holding paragraphs, signal-word safety messages, numbered procedures with expected results, lists, captioned tables and captioned figures. A section's id (`sec-6.2`) is the same anchor in every exported format. Document ids do not contain the run id (`kalvora-dental:KD-SM-CF600-EN:en:rev-C`), so a library can later be shared across runs; rows are keyed by `(run_id, doc_id)`.
+- **Ground truth.** A builder returns links "case → document section → grade": `resolves` (2), `supports` (1), `equivalent` (the grade of the section it matches) and `hard_negative` (0, a plausible but wrong section). It may also record where a case's answer lives (`documents`, `partial`, or `agent_knowledge` when the fix is known only to the agent). Builders receive per-cause coverage (`documented`, `partial`, `agent_only`) and must not document an `agent_only` cause. None of this is written into documents or transcripts.
+- **Export.** `csfd export <run_id> --format documents` (also part of `--format all`) renders what was built; a run without documents exports nothing:
+
+```text
+data/exports/<run_id>/documents/
+  index.jsonl                    # one line per document: ids, type, tier, revision, status, files + sha256
+  docs/KD-SM-CF600-EN_revC/
+    KD-SM-CF600-EN_revC.docx     # python-docx: real heading styles, captions, bookmarks, alt text, "Page X of Y"
+    KD-SM-CF600-EN_revC.pdf      # Typst: outline, tagged, PDF/UA-1 by default (documents.pdf_standard)
+    KD-SM-CF600-EN_revC.md       # Markdown sidecar, headings carry {#sec-6.2} anchors
+    KD-SM-CF600-EN_revC.json     # IR + one chunk per section (text, heading path, PDF pages) + figures
+    assets/fig-3-1.svg, .png
+  rag/
+    corpus.jsonl                 # BEIR layout: one row per section, _id = <doc_id>#<section_id>
+    queries.jsonl                # one row per case: the customer's opening message, _id = q:<case_uid>
+    qrels/test.tsv               # query-id, corpus-id, integer grade (2 resolves, 1 supports)
+    qrels/test.resolves.tsv      # only the grade-2 pairs
+    qrels_detailed.jsonl         # every link with relation, basis, contact, hard negatives
+  manifest.json                  # sha256 of every file
+```
+
+Rendering is deterministic: the PDF uses only Typst's built-in fonts and the issue date as its creation date, and the DOCX package is written with fixed timestamps, so exporting the same documents twice gives identical bytes.
+
 ## LangGraph Studio
 
 ```bash
@@ -428,6 +459,7 @@ Exports under `data/exports/<run_id>/`:
 - `problem_embeddings` — per-problem dedup vector (`problem_id`, `model`, `dim`, `vector: list[float]`)
 - `manifest.json` — SHA-256 of every JSONL file (JSONL exports only)
 - `transcripts/` — see [Transcript export](#transcript-export) (`--format transcripts` or `all` only)
+- `documents/` — see [Supporting documents](#supporting-documents-preview) (`--format documents` or `all`, only when the run has documents)
 
 ## Configuration profiles
 
@@ -462,9 +494,10 @@ uv run csfd export <run_id> --format transcripts
 | `csfd generate --channel email\|phone [--disfluency none\|light\|moderate]` | conversation format ([Conversation formats](#conversation-formats)) |
 | `csfd generate --rounds N` | every case becomes N related contacts ([Multi-call cases](#multi-call-cases-rounds)) |
 | `csfd generate --plan cases.yaml` / `--problems-from RUN_ID` | pin cases; reuse an earlier run's problems ([Case plans](#case-plans-and-problem-reuse)) |
-| `csfd export RUN_ID [--format jsonl\|parquet\|both\|transcripts\|all] [--profile P]` | write `data/exports/<run_id>/` (default `jsonl`) |
+| `csfd export RUN_ID [--format jsonl\|parquet\|both\|transcripts\|documents\|all] [--profile P]` | write `data/exports/<run_id>/` (default `jsonl`) |
 | `csfd export RUN_ID --format transcripts [--no-timestamps] [--speaker-style S] [--header-style H]` | transcript layout ([Transcript export](#transcript-export)) |
 | `csfd inspect RUN_ID` | print row counts per artifact |
+| `csfd documents RUN_ID [--profile P]` | build supporting documents for a finished run (needs `documents.enabled: true`; [Supporting documents](#supporting-documents-preview)) |
 | `csfd render-graphs` | regenerate `docs/diagrams/*.mmd` |
 
 ## Tests

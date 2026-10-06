@@ -2,6 +2,10 @@ def test_all_top_level_modules_import() -> None:
     import csfd
     import csfd.budget.breaker
     import csfd.budget.tracker
+    import csfd.documents.backfill
+    import csfd.documents.build
+    import csfd.documents.export
+    import csfd.documents.ir
     import csfd.errors
     import csfd.models.fake
     import csfd.models.registry
@@ -12,6 +16,7 @@ def test_all_top_level_modules_import() -> None:
     import csfd.seeds.scenarios
     import csfd.settings
     import csfd.storage.db
+    import csfd.storage.documents
     import csfd.storage.exporters
     import csfd.storage.migrations.runner
     import csfd.storage.repository
