@@ -55,9 +55,9 @@ LANGUAGE_CODE = "EN"
 # Error codes by kind; '#' is a digit.
 _CODE_FORMATS = {"error": "E-##", "warning": "W-##"}
 _MAX_DRAWS = 10_000
-# A parts entry's leading token that reads as a part number: letters and digits
-# joined by separators ("KD-600-2204"), or a run of four or more digits.
-_NUMBER_TOKEN = re.compile(r"[A-Za-z0-9]+(?:[-/][A-Za-z0-9]+)+|[A-Za-z]*\d{4,}[A-Za-z0-9]*")
+_TOKEN = re.compile(r"[A-Za-z0-9]+(?:[-/][A-Za-z0-9]+)*")
+
+Shape = tuple[str | int, ...]
 
 
 class Part(BaseModel):
@@ -500,10 +500,36 @@ def problem_model(
     return next(iter(held)) if held is not None and len(held) == 1 else None
 
 
-def _leading_number(entry: str) -> str | None:
-    """The part-number-like token a parts entry starts with, if any."""
+def _shape(identifier: str) -> Shape:
+    """An identifier's letter groups (upper case) and digit-group lengths: KD-60-2204 -> KD, 2, 4."""
+    return tuple(
+        len(g) if g.isdigit() else g.upper() for g in re.findall(r"[A-Za-z]+|\d+", identifier)
+    )
+
+
+def _shapes(registry: Mapping[str, ProductFacts]) -> set[Shape]:
+    return {_shape(i) for i in _identifiers(registry)}
+
+
+def _near(token: Shape, shape: Shape) -> bool:
+    """Same letter groups, and digit groups at most one digit longer or shorter."""
+    return len(token) == len(shape) and all(
+        a == b if isinstance(a, str) or isinstance(b, str) else abs(a - b) <= 1
+        for a, b in zip(token, shape, strict=True)
+    )
+
+
+def _leading_number(entry: str, shapes: set[Shape]) -> str | None:
+    """The token a parts entry starts with, when it is shaped like a registry identifier.
+
+    "KD-600-2204" is a near miss of ``KD-60-####``; a quantity such as "3-way"
+    or "12-section", or a name such as "Pt1000", has no registry shape.
+    """
     token = next(iter(entry.split()), "").rstrip(",;:")
-    return token if _NUMBER_TOKEN.fullmatch(token) and re.search(r"\d", token) else None
+    if not _TOKEN.fullmatch(token) or not re.search(r"\d", token):
+        return None
+    shape = _shape(token)
+    return token if any(_near(shape, s) for s in shapes) else None
 
 
 def unregistered_part_numbers(
@@ -514,8 +540,8 @@ def unregistered_part_numbers(
     """Parts entries that start with a part number ``model``'s registry entry lacks.
 
     This covers numbers :func:`unknown_identifiers` cannot recognise because
-    their shape differs from the registry's ("KD-600-2204" for ``KD-60-####``,
-    or an all-digit number). Without a known ``model`` any model's part
+    their shape differs slightly from the registry's ("KD-600-2204" for
+    ``KD-60-####``, or an all-digit number like the seed's). Without a known ``model`` any model's part
     numbers are allowed. Returns one short message per distinct number.
     """
     if not registry:
@@ -524,9 +550,10 @@ def unregistered_part_numbers(
     scope = [facts] if facts is not None else list(registry.values())
     allowed = {_normalise(p.part_number) for f in scope for p in f.parts}
     patterns = _patterns(p.part_number for f in registry.values() for p in f.parts)
+    shapes = _shapes(registry)
     issues: dict[str, str] = {}
     for entry in entries:
-        token = _leading_number(entry)
+        token = _leading_number(entry, shapes)
         if (
             token is None
             or _normalise(token) in allowed
@@ -565,12 +592,13 @@ def register_parts(
     facts = out[model]
     patterns = _patterns(p.part_number for f in out.values() for p in f.parts)
     taken = {p.part_number for f in out.values() for p in f.parts}
+    shapes = _shapes(out)
     fake = _stream(seed, f"registry:{model}:parts")
     canonical: list[str] = []
     for entry in entries:
         by_number = {_normalise(p.part_number): p for p in facts.parts}
         numbers = [_normalise(m.group()) for p in patterns for m in p.finditer(entry)]
-        lead = _leading_number(entry)
+        lead = _leading_number(entry, shapes)
         if lead is not None:
             numbers.append(_normalise(lead))
         if numbers:

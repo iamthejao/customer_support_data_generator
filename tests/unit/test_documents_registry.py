@@ -260,12 +260,32 @@ def test_near_miss_part_numbers_are_reported_and_never_registered() -> None:
     issues = unregistered_part_numbers([near_miss, cf.parts[0].entry], registry, "CF-600")
     assert len(issues) == 1 and "KD-600-2204" in issues[0]
 
-    entries = [near_miss, "1234567 Fan", "Fuse, 6.3 A", "O-ring, door"]
+    entries = [near_miss, "KD-60-22045 Fan", "Fuse, 6.3 A", "O-ring, door"]
     updated, canonical = register_parts(registry, "CF-600", entries, seed=7)
-    assert canonical[:3] == [near_miss, "1234567 Fan", cf.parts[2].entry]
-    # Only the plain name is registered; names with a number-like lead are not.
+    assert canonical[:3] == [near_miss, "KD-60-22045 Fan", cf.parts[2].entry]
+    # Only the plain name is registered; entries led by a near-miss number are not.
     assert [p.name for p in updated["CF-600"].parts[len(cf.parts) :]] == ["O-ring, door"]
     assert not unregistered_part_numbers(entries[2:], registry, "CF-600")
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "3-way solenoid valve",
+        "2-stage vacuum pump",
+        "5-axis spindle motor",
+        "12-section manifold",
+        "Pt1000 sensor",
+    ],
+)
+def test_quantity_prefixed_part_names_are_registered_as_new_parts(name: str) -> None:
+    registry = _registry()
+    cf = registry["CF-600"]
+    assert unregistered_part_numbers([name], registry, "CF-600") == []
+    updated, canonical = register_parts(registry, "CF-600", [name], seed=7)
+    new = updated["CF-600"].parts[-1]
+    assert new.name == name and new.part_number not in {p.part_number for p in cf.parts}
+    assert canonical == [new.entry]
 
 
 def test_an_all_digit_seed_part_number_is_matched_not_registered() -> None:

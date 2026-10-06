@@ -110,8 +110,9 @@ def _machine_issue(state: PipelineState, draft: ProblemBrainstormOutput) -> str 
     held = cited_models([text, *plan], state.product_facts, state.company.case_facts)
     if held is not None and len(held) != 1:
         return (
-            "The problem names no machine model and cites part numbers or error codes "
-            "of more than one machine; name the machine and use only its identifiers."
+            "The problem names no machine model, and the part numbers or error codes it "
+            "cites are ambiguous across machines; name the machine model the problem is "
+            "about and use only that machine's identifiers."
         )
     if held is None and any(c.parts for c in draft.diagnosis_plan.candidate_causes):
         return (
