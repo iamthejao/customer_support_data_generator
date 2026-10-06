@@ -11,6 +11,9 @@
 --                            and its plan (planned problem state, beats per contact)
 --   * agent_traces         — per-agent-call observability records
 --   * problem_embeddings   — per-problem embedding for commit-time dedup in Phase 1
+--   * documents, document_assets, document_links, document_cases
+--                          — supporting documents of a run (IR, images, retrieval
+--                            ground truth, answer source per case)
 --
 -- `incoming_requests` / `resolutions` carry `case_uid` + `round_index` so one
 -- allocation slot (a case, `lineage.ticket_uid`) can span several contacts
@@ -180,3 +183,60 @@ CREATE TABLE IF NOT EXISTS problem_embeddings (
     created_at  TIMESTAMP NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_problem_embeddings_run ON problem_embeddings(run_id);
+
+-- Supporting documents (csfd.documents), written by `csfd documents <run_id>`.
+-- A document is stored as its IR (csfd.documents.ir.DocumentIR) and rendered at
+-- export time. doc_id does not contain the run id (it is shaped for sharing a
+-- library across runs later), so rows are keyed by (run_id, doc_id).
+CREATE TABLE IF NOT EXISTS documents (
+    run_id       TEXT NOT NULL REFERENCES runs(id),
+    doc_id       TEXT NOT NULL,
+    tier         TEXT NOT NULL CHECK (tier IN ('library', 'problem', 'case')),
+    doc_type     TEXT NOT NULL,
+    doc_number   TEXT NOT NULL,
+    revision     TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'current' CHECK (status IN ('current', 'superseded')),
+    audience     TEXT NOT NULL CHECK (audience IN ('customer', 'internal')),
+    language     TEXT NOT NULL,
+    problem_id   TEXT,
+    case_uid     TEXT,
+    builder      TEXT NOT NULL,
+    ir_json      TEXT NOT NULL,
+    ir_sha256    TEXT NOT NULL,
+    created_at   TIMESTAMP NOT NULL,
+    PRIMARY KEY (run_id, doc_id)
+);
+
+-- Images the documents show; asset_id is the sha256 of the bytes.
+CREATE TABLE IF NOT EXISTS document_assets (
+    run_id           TEXT NOT NULL REFERENCES runs(id),
+    asset_id         TEXT NOT NULL,
+    media_type       TEXT NOT NULL,
+    origin           TEXT NOT NULL CHECK (origin IN ('template', 'claude_svg', 'cad', 'library')),
+    provenance_json  TEXT NOT NULL DEFAULT '{}',
+    content          BLOB NOT NULL,
+    PRIMARY KEY (run_id, asset_id)
+);
+
+-- Retrieval ground truth: how relevant a document section is to a case (or one
+-- of its contacts). Never rendered into documents or transcripts.
+CREATE TABLE IF NOT EXISTS document_links (
+    run_id       TEXT NOT NULL REFERENCES runs(id),
+    case_uid     TEXT NOT NULL,
+    round_index  INTEGER,
+    doc_id       TEXT NOT NULL,
+    section_id   TEXT,
+    relation     TEXT NOT NULL CHECK (relation IN ('resolves', 'supports', 'equivalent', 'hard_negative')),
+    grade        INTEGER NOT NULL CHECK (grade IN (0, 1, 2)),
+    basis        TEXT NOT NULL,
+    FOREIGN KEY (run_id, doc_id) REFERENCES documents(run_id, doc_id)
+);
+CREATE INDEX IF NOT EXISTS idx_document_links_case ON document_links(run_id, case_uid);
+
+-- Where each case's answer lives: in the documents, partly, or only in the agent's knowledge.
+CREATE TABLE IF NOT EXISTS document_cases (
+    run_id         TEXT NOT NULL REFERENCES runs(id),
+    case_uid       TEXT NOT NULL,
+    answer_source  TEXT NOT NULL CHECK (answer_source IN ('documents', 'partial', 'agent_knowledge')),
+    PRIMARY KEY (run_id, case_uid)
+);

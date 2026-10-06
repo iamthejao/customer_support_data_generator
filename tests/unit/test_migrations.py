@@ -24,6 +24,10 @@ def test_apply_migrations_creates_all_tables(tmp_db_path: Path) -> None:
         "lineage",
         "agent_traces",
         "problem_embeddings",
+        "documents",
+        "document_assets",
+        "document_links",
+        "document_cases",
     }:
         assert required in names
 

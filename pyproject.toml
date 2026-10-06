@@ -25,6 +25,8 @@ dependencies = [
     "langgraph-checkpoint-sqlite~=3.1",
     "aiosqlite~=0.20",
     "faker~=40.39",
+    "python-docx~=1.2",
+    "typst~=0.15.0",
 ]
 
 [project.scripts]
@@ -47,6 +49,7 @@ dev = [
     "types-pyyaml",
     "pre-commit~=3.7",
     "langgraph-cli[inmem]~=0.4",
+    "pypdf~=6.0",
 ]
 
 [tool.ruff]

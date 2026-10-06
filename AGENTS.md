@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This is a Python package named `csfd` using a `src/` layout; code lives in `src/csfd/` and the CLI in `src/csfd/cli.py`. The LangGraph pipeline is in `src/csfd/graph/`: `pipeline_graph.py` (parent + `PipelineState`), `phase1_graph.py` (Problem Database), `phase2_graph.py` (dialogues). Prompt templates (Jinja) are in `prompts/`, company seeds in `seeds/<company>/`, configuration in `config/` (`default.yaml` plus `profiles/`), and the SQLite schema in `src/csfd/storage/migrations/schema.sql` (not upgraded in place: recreate `data/runs.sqlite` after a schema change). `README.md` owns the user-facing behaviour. Tests are split into `tests/unit/` and `tests/integration/`.
+This is a Python package named `csfd` using a `src/` layout; code lives in `src/csfd/` and the CLI in `src/csfd/cli.py`. The LangGraph pipeline is in `src/csfd/graph/`: `pipeline_graph.py` (parent + `PipelineState`), `phase1_graph.py` (Problem Database), `phase2_graph.py` (dialogues). Supporting documents (IR, DOCX and Typst renderers, export, back-fill) live in `src/csfd/documents/`; the PDF template is `src/csfd/documents/templates/document.typ`. Prompt templates (Jinja) are in `prompts/`, company seeds in `seeds/<company>/`, configuration in `config/` (`default.yaml` plus `profiles/`), and the SQLite schema in `src/csfd/storage/migrations/schema.sql` (not upgraded in place: recreate `data/runs.sqlite` after a schema change). `README.md` owns the user-facing behaviour. Tests are split into `tests/unit/` and `tests/integration/`.
 
 ## Build, Test, and Development Commands
 

@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from csfd.storage.db import Database
+from csfd.storage.exporters import run_scope
 
 if TYPE_CHECKING:
     from csfd.storage.db_async import AsyncDatabase
@@ -418,6 +419,15 @@ class ProblemRepo:
             ).fetchall()
         return [_row_to_problem(r) for r in rows]
 
+    def list_in_run_scope(self, run_id: str) -> list[ProblemRecord]:
+        """A run's problems: its own plus those it reuses from an earlier run (--problems-from)."""
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM problems WHERE {run_scope('problems')} ORDER BY created_at, id",
+                (run_id,),
+            ).fetchall()
+        return [_row_to_problem(r) for r in rows]
+
 
 def _row_to_problem(r: sqlite3.Row) -> ProblemRecord:
     hints = json.loads(r["resolution_hints_json"]) if r["resolution_hints_json"] else {}
@@ -798,6 +808,32 @@ class LineageRepo:
                 (run_id,),
             ).fetchone()
         return int(row["n"])
+
+    def list_for_run(self, run_id: str) -> list[LineageRecord]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM lineage WHERE run_id = ? ORDER BY slot_index",
+                (run_id,),
+            ).fetchall()
+        return [_row_to_lineage(r) for r in rows]
+
+
+def _row_to_lineage(r: sqlite3.Row) -> LineageRecord:
+    return LineageRecord(
+        ticket_uid=r["ticket_uid"],
+        run_id=r["run_id"],
+        slot_index=r["slot_index"],
+        problem_id=r["problem_id"],
+        ticket_type=r["ticket_type"],
+        customer_tier=r["customer_tier"],
+        customer_tone=r["customer_tone"],
+        incoming_request_id=r["incoming_request_id"],
+        resolution_id=r["resolution_id"],
+        created_at=datetime.fromisoformat(r["created_at"]),
+        case_facts=json.loads(r["case_facts_json"]) if r["case_facts_json"] else None,
+        problem_state=r["problem_state"],
+        case_plan=json.loads(r["case_plan_json"]) if r["case_plan_json"] else None,
+    )
 
 
 @dataclass(slots=True)

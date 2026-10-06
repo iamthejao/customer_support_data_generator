@@ -12,6 +12,9 @@ import typer
 
 from csfd.agents.factory import AgentFactory
 from csfd.case_plan import CasePlan, load_case_plan
+from csfd.documents.backfill import build_run_documents
+from csfd.documents.build import resolve_builders
+from csfd.documents.export import export_run_documents
 from csfd.models.registry import build_llm
 from csfd.observability.logging import configure_logging
 from csfd.pipeline import run_pipeline
@@ -22,6 +25,7 @@ from csfd.settings import (
     AppSettings,
     Channel,
     Disfluency,
+    DocumentsConfig,
     HeaderStyle,
     SeedsConfig,
     SpeakerStyle,
@@ -334,15 +338,23 @@ def _transcript_style(profile: str | None) -> TranscriptStyleConfig:
     return load_settings(profile=profile).storage.transcripts
 
 
+def _documents_config(profile: str | None) -> DocumentsConfig:
+    """Documents settings from YAML; the defaults outside a configured checkout."""
+    if profile is None and not Path("config/default.yaml").exists():
+        return DocumentsConfig()
+    return load_settings(profile=profile).documents
+
+
 @app.command()
 def export(
     run_id: str = typer.Argument(...),
     format: str = typer.Option(
         "jsonl",
         "--format",
-        help="jsonl | parquet | both (jsonl+parquet) | transcripts | all. "
+        help="jsonl | parquet | both (jsonl+parquet) | transcripts | documents | all. "
         "'transcripts' writes plain-text call/email transcripts grouped by case "
-        "under <out>/<run_id>/transcripts/.",
+        "under <out>/<run_id>/transcripts/; 'documents' renders the run's supporting "
+        "documents (built with `csfd documents`) under <out>/<run_id>/documents/.",
     ),
     sqlite_path: str = typer.Option("data/runs.sqlite", "--sqlite-path"),
     out: str = typer.Option("data/exports", "--out"),
@@ -366,13 +378,14 @@ def export(
     ),
     profile: str | None = typer.Option(None, "--profile"),
 ) -> None:
-    """Export a run's artifacts to JSONL, Parquet, and/or text transcripts under <out>/<run_id>/."""
+    """Export a run's artifacts (JSONL, Parquet, transcripts, documents) under <out>/<run_id>/."""
     expansions = {
         "jsonl": {"jsonl"},
         "parquet": {"parquet"},
         "transcripts": {"transcripts"},
+        "documents": {"documents"},
         "both": {"jsonl", "parquet"},
-        "all": {"jsonl", "parquet", "transcripts"},
+        "all": {"jsonl", "parquet", "transcripts", "documents"},
     }
     if format not in expansions:
         raise typer.BadParameter(f"must be one of: {', '.join(expansions)}", param_hint="--format")
@@ -401,7 +414,52 @@ def export(
             speaker_style=style.speaker_style,
             header_style=style.header_style,
         )
+    if "documents" in formats:
+        docs = _documents_config(profile)
+        written = export_run_documents(db, run_id, out_dir=out_dir, formats=docs.formats)
+        if not written and format == "documents":
+            typer.echo(f"Run {run_id} has no documents; build them with `csfd documents {run_id}`.")
     typer.echo(f"Exported run {run_id} to {out_dir / run_id}.")
+
+
+@app.command()
+def documents(
+    run_id: str = typer.Argument(...),
+    sqlite_path: str = typer.Option("data/runs.sqlite", "--sqlite-path"),
+    profile: str | None = typer.Option(None, "--profile"),
+) -> None:
+    """Build supporting documents for a finished run (needs documents.enabled: true).
+
+    Runs the builders named in documents.builders over the run's problems and
+    cases and stores the documents and their retrieval links, replacing an
+    earlier build. Render them with `csfd export RUN_ID --format documents`.
+    """
+    settings = load_settings(profile=profile)
+    if not settings.documents.enabled:
+        typer.echo(
+            "Error: supporting documents are disabled (documents.enabled: false). "
+            "Enable them in a profile to build documents.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    try:
+        builders = resolve_builders(settings.documents.builders)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="documents.builders") from exc
+    if not builders:
+        typer.echo("No document builders are configured (documents.builders is empty).")
+        return
+    db = Database(path=Path(sqlite_path))
+    # Like `generate`, create missing tables, so runs of an older database can be back-filled.
+    _with_current_schema(apply_migrations, db)
+    try:
+        RunRepo(db).get(run_id)
+    except KeyError as exc:
+        raise typer.BadParameter(f"no run {run_id!r} in {db.path}", param_hint="RUN_ID") from exc
+    result = build_run_documents(db, run_id, builders, seeds_dir=settings.seeds.dir)
+    typer.echo(
+        f"Built {len(result.documents)} documents and {len(result.links)} links for run {run_id}."
+    )
 
 
 @app.command()

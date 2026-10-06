@@ -112,6 +112,16 @@ storage:
     speaker_style: upper   # upper (AGENT:) | title (Agent:) | role (Agent: / Caller (<job role>):)
     header_style: csfd     # csfd (full key: value header) | wissant (call_id/call_date + ---) | none
 
+# Supporting documents (manuals, KB articles, parts lists ...) built for a finished
+# run by `csfd documents <run_id>` and rendered by `csfd export --format documents`.
+# Off by default; enable in a profile. `builders` names the document builders to
+# run (none ship yet). Markdown and JSON sidecars are always written; `formats`
+# adds Word and/or PDF (tagged PDF/UA-1).
+documents:
+  enabled: false
+  builders: []
+  formats: [docx, pdf]
+
 # Phase 1 near-duplicate rejection: a problem whose embedding has cosine >= threshold
 # to one already committed in the run is regenerated. Needs an OpenAI-compatible
 # embeddings endpoint (local Ollama by default); set enabled: false without one.
