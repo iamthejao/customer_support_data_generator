@@ -239,7 +239,8 @@ class DocumentsConfig(BaseModel):
     """Supporting documents (``csfd documents``, ``csfd export --format documents``).
 
     Off by default: ``csfd documents <run_id>`` refuses to build unless
-    ``enabled`` is true. ``builders`` names the document builders to run
+    ``enabled`` is true, and only enabled runs draw the identifier registry
+    (:mod:`csfd.documents.registry`) before Phase 1. ``builders`` names the document builders to run
     (``csfd.documents.build.BUILDERS``). ``formats`` are the files rendered
     next to the always-written Markdown and JSON sidecars.
     """

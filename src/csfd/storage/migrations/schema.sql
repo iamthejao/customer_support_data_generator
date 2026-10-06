@@ -240,3 +240,13 @@ CREATE TABLE IF NOT EXISTS document_cases (
     answer_source  TEXT NOT NULL CHECK (answer_source IN ('documents', 'partial', 'agent_knowledge')),
     PRIMARY KEY (run_id, case_uid)
 );
+
+-- The identifier registry (csfd.documents.registry): part numbers, error codes and
+-- document numbers per machine model, drawn once per run when documents are enabled.
+CREATE TABLE IF NOT EXISTS product_facts (
+    run_id      TEXT NOT NULL REFERENCES runs(id),
+    model       TEXT NOT NULL,
+    source      TEXT NOT NULL CHECK (source IN ('seed', 'generated', 'mixed')),
+    facts_json  TEXT NOT NULL,
+    PRIMARY KEY (run_id, model)
+);

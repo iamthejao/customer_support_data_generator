@@ -20,6 +20,7 @@ _ROLE_FALLBACK: dict[str, str] = {
     "incoming_request_generator": "generator",
     "customer_turn_generator": "generator",
     "agent_turn_generator": "generator",
+    "registry_writer": "generator",
     "combined_problem_check": "combined_checker",
     "conversation_consistency_check": "combined_checker",
 }

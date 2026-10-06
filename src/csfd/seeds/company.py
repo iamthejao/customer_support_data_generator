@@ -29,13 +29,57 @@ class AssetModel:
     serial_format: str = ""
 
 
+@dataclass(slots=True, frozen=True)
+class SeedPart:
+    """A spare part the seed's optional ``### Parts`` table lists for a model.
+
+    An empty ``part_number`` is assigned by the identifier registry
+    (:mod:`csfd.documents.registry`).
+    """
+
+    model: str
+    name: str
+    part_number: str = ""
+
+
+@dataclass(slots=True, frozen=True)
+class SeedErrorCode:
+    """An error code from the seed's optional ``### Error codes`` table (empty code: assigned)."""
+
+    model: str
+    meaning: str
+    code: str = ""
+    action: str = ""
+
+
+@dataclass(slots=True, frozen=True)
+class SeedDocument:
+    """A document number from the seed's optional ``### Documents`` table.
+
+    ``doc_type`` is a document type name (``service_manual``); ``revisions`` run
+    oldest to current. Empty values are assigned by the registry.
+    """
+
+    model: str
+    doc_type: str
+    doc_number: str = ""
+    revisions: tuple[str, ...] = ()
+
+
 @dataclass(slots=True)
 class CaseFactsCatalogue:
-    """Structured values the generator draws each case's facts from."""
+    """Structured values the generator draws each case's facts from.
+
+    ``parts``, ``error_codes`` and ``documents`` come from optional seed tables
+    and feed the identifier registry; most seeds leave them out.
+    """
 
     assets: list[AssetModel] = field(default_factory=list)
     caller_roles: list[str] = field(default_factory=list)
     site_locales: list[str] = field(default_factory=list)
+    parts: list[SeedPart] = field(default_factory=list)
+    error_codes: list[SeedErrorCode] = field(default_factory=list)
+    documents: list[SeedDocument] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -70,6 +114,10 @@ def _table_rows(text: str) -> list[dict[str, str]]:
     ]
 
 
+def _cell(row: dict[str, str], key: str) -> str:
+    return row.get(key, "").strip("`* ")
+
+
 def _parse_case_facts(text: str) -> CaseFactsCatalogue:
     subs = _subsections(text)
     assets = [
@@ -85,6 +133,33 @@ def _parse_case_facts(text: str) -> CaseFactsCatalogue:
         assets=assets,
         caller_roles=_BULLET.findall(subs.get("caller roles", "")),
         site_locales=[s.strip("` ") for s in _BULLET.findall(subs.get("site locales", ""))],
+        parts=[
+            SeedPart(
+                model=_cell(r, "model"), name=_cell(r, "name"), part_number=_cell(r, "part number")
+            )
+            for r in _table_rows(subs.get("parts", ""))
+            if _cell(r, "model") and _cell(r, "name")
+        ],
+        error_codes=[
+            SeedErrorCode(
+                model=_cell(r, "model"),
+                meaning=_cell(r, "meaning"),
+                code=_cell(r, "code"),
+                action=_cell(r, "action"),
+            )
+            for r in _table_rows(subs.get("error codes", ""))
+            if _cell(r, "model") and _cell(r, "meaning")
+        ],
+        documents=[
+            SeedDocument(
+                model=_cell(r, "model"),
+                doc_type=_cell(r, "type"),
+                doc_number=_cell(r, "number"),
+                revisions=tuple(v.strip() for v in _cell(r, "revisions").split(",") if v.strip()),
+            )
+            for r in _table_rows(subs.get("documents", ""))
+            if _cell(r, "model") and _cell(r, "type")
+        ],
     )
 
 

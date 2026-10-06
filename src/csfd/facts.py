@@ -40,7 +40,7 @@ class CaseFacts(BaseModel):
     caller_role: str | None = None
 
 
-def _named_asset(catalogue: CaseFactsCatalogue, problem_text: str) -> AssetModel | None:
+def named_asset(catalogue: CaseFactsCatalogue, problem_text: str) -> AssetModel | None:
     """The first catalogue model the problem record names, if any.
 
     Uses the same matching as :func:`identifier_mismatches`, so "CF600" or
@@ -67,7 +67,7 @@ def draw_case_facts(
     fake = Faker(locale)
     fake.seed_instance(rng.getrandbits(64))
     picked = rng.choice(catalogue.assets) if catalogue.assets else None
-    asset = _named_asset(catalogue, problem_text) or picked
+    asset = named_asset(catalogue, problem_text) or picked
     serial = (
         fake.bothify(asset.serial_format, letters=string.ascii_uppercase)
         if asset is not None and asset.serial_format
@@ -111,9 +111,15 @@ def _normalise(identifier: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", identifier.upper())
 
 
-def _serial_pattern(serial_format: str) -> re.Pattern[str]:
+def format_pattern(fmt: str) -> re.Pattern[str]:
+    """A whole-token pattern for identifiers shaped like ``fmt`` (``#`` digit, ``?`` letter).
+
+    Separators (``-`` or a space) are optional, so ``CF600-1234-AB`` also
+    matches ``CF600 1234AB``. Used for serial numbers here and for the
+    identifier registry's part numbers and error codes.
+    """
     parts = []
-    for ch in serial_format:
+    for ch in fmt:
         if ch == "#":
             parts.append(r"\d")
         elif ch == "?":
@@ -170,7 +176,7 @@ def identifier_mismatches(
     # Serials first, then masked out, so a serial's model-like prefix is not
     # read again as a model name.
     for fmt in dict.fromkeys(a.serial_format for a in catalogue.assets if a.serial_format):
-        pattern = _serial_pattern(fmt)
+        pattern = format_pattern(fmt)
         for m in pattern.finditer(text):
             found = _normalise(m.group())
             if found in seen or (facts.asset_serial and found == _normalise(facts.asset_serial)):

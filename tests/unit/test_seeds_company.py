@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from csfd.seeds.company import CompanyProfile, parse_company_seed
+from csfd.seeds.company import (
+    CompanyProfile,
+    SeedDocument,
+    SeedErrorCode,
+    SeedPart,
+    parse_company_seed,
+)
 
 
 def test_parse_company_seed_extracts_name_and_sections() -> None:
@@ -57,3 +63,25 @@ def test_parse_company_seed_without_case_facts_is_empty(tmp_path: Path) -> None:
     seed.write_text("# Acme\n\n## About\nx\n")
     catalogue = parse_company_seed(seed).case_facts
     assert catalogue.assets == [] and catalogue.caller_roles == [] and catalogue.site_locales == []
+
+
+def test_parse_company_seed_reads_registry_tables() -> None:
+    catalogue = parse_company_seed(Path("tests/fixtures/registry_company_seed.md")).case_facts
+    assert catalogue.parts == [
+        SeedPart(model="AX-100", name="Power supply unit, 240 W", part_number="AC-PSU-001"),
+        SeedPart(model="AX-100", name="Fan tray, front"),
+    ]
+    assert catalogue.error_codes == [
+        SeedErrorCode(
+            model="AX-100", meaning="Fan tray failure", code="F-01", action="Replace the fan tray"
+        ),
+        SeedErrorCode(model="AX-100", meaning="Disk nearly full", action="Free disk space"),
+    ]
+    assert catalogue.documents == [
+        SeedDocument(
+            model="AX-100",
+            doc_type="service_manual",
+            doc_number="AC-SVC-100",
+            revisions=("A", "B", "C"),
+        )
+    ]

@@ -114,9 +114,11 @@ storage:
 
 # Supporting documents (manuals, KB articles, parts lists ...) built for a finished
 # run by `csfd documents <run_id>` and rendered by `csfd export --format documents`.
-# Off by default; enable in a profile. `builders` names the document builders to
-# run (none ship yet). Markdown and JSON sidecars are always written; `formats`
-# adds Word and/or PDF (tagged PDF/UA-1).
+# Off by default; enable in a profile. When enabled, `csfd generate` also draws the
+# identifier registry (part numbers, error codes, document numbers per machine model;
+# one `registry_writer` call per model) that Phase 1 then uses. `builders` names the
+# document builders to run (none ship yet). Markdown and JSON sidecars are always
+# written; `formats` adds Word and/or PDF (tagged PDF/UA-1).
 documents:
   enabled: false
   builders: []
