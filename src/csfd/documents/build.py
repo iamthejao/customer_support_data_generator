@@ -191,6 +191,8 @@ def _agent_only_causes(ctx: BuildContext, doc: DocumentIR) -> set[str]:
 
 def _check(ctx: BuildContext, result: BuildResult) -> None:
     docs = {b.document.doc_id: b for b in result.documents}
+    problem_ids = {p.id for p in ctx.problems}
+    case_uids = {c.case_uid for c in ctx.cases}
     folders: dict[str, str] = {}
     for built in result.documents:
         doc = built.document
@@ -198,6 +200,10 @@ def _check(ctx: BuildContext, result: BuildResult) -> None:
         if folder in folders:
             raise ValueError(f"documents {folders[folder]} and {doc.doc_id} share {folder!r}")
         folders[folder] = doc.doc_id
+        if doc.tier == "problem" and doc.problem_id not in problem_ids:
+            raise ValueError(f"document {doc.doc_id} serves unknown problem {doc.problem_id}")
+        if doc.tier == "case" and doc.case_uid not in case_uids:
+            raise ValueError(f"document {doc.doc_id} serves unknown case {doc.case_uid}")
         have = {a.asset_id for a in built.assets}
         for fig in doc.figures():
             if fig.asset_id not in have:
@@ -210,7 +216,6 @@ def _check(ctx: BuildContext, result: BuildResult) -> None:
                         f"document {doc.doc_id} section {s.id} documents {cause!r}, "
                         "which is agent knowledge only"
                     )
-    case_uids = {c.case_uid for c in ctx.cases}
     for link in result.links:
         if link.case_uid not in case_uids:
             raise ValueError(f"link to unknown case {link.case_uid}")

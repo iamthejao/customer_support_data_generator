@@ -30,8 +30,9 @@ from csfd.documents.ir import (
     Procedure,
     Section,
     Table,
+    bookmark_name,
 )
-from csfd.documents.render_docx import SIGNALS, bookmark_name
+from csfd.documents.render_docx import SIGNALS
 
 SCHEMA = "csfd.document/1"
 

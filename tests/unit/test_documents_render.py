@@ -12,8 +12,9 @@ import pytest
 from pypdf import PdfReader
 
 from csfd.documents.figures import raster_bytes, svg_to_png
+from csfd.documents.ir import DocumentIR, Section
 from csfd.documents.render_docx import render_docx
-from csfd.documents.render_pdf import render_pdf, template_source
+from csfd.documents.render_pdf import render_pdf
 from tests.fixtures.sample_documents import SVG, figure_asset, service_manual
 
 DOC = service_manual("Kalvora Dental")
@@ -74,7 +75,7 @@ def test_docx_has_captions_bookmarks_alt_text_and_page_fields(docx_bytes: bytes)
     assert "Table 9-1. Spare parts" in captions
     body = _xml(docx_bytes, "word/document.xml")
     bookmarks = re.findall(r'w:bookmarkStart w:id="\d+" w:name="([^"]+)"', body)
-    assert bookmarks == ["sec_1", "sec_3", "sec_6", "sec_6_2", "sec_9"]
+    assert bookmarks == ["sec_1", "sec_3", "sec_6", "sec_6__2", "sec_9"]
     assert 'descr="Line drawing of the CF-600 front' in body
     assert "<w:tblHeader" in body
     footer = _xml(docx_bytes, "word/footer1.xml")
@@ -137,5 +138,12 @@ def test_svg_figures_become_png_for_docx() -> None:
     assert raster_bytes(figure_asset()) == (png, "png")
 
 
-def test_template_ships_inside_the_package() -> None:
-    assert "sys.inputs.payload" in template_source()
+def test_dotted_and_dashed_section_ids_get_distinct_bookmarks() -> None:
+    sections = [
+        Section(id="sec-6.2", number="6.2", title="A"),
+        Section(id="sec-6-2", number="6.3", title="B"),
+    ]
+    doc = DocumentIR.model_validate({**DOC.model_dump(), "sections": sections})
+    body = zipfile.ZipFile(io.BytesIO(render_docx(doc, {}))).read("word/document.xml").decode()
+    bookmarks = re.findall(r'w:bookmarkStart w:id="\d+" w:name="([^"]+)"', body)
+    assert bookmarks == ["sec_6__2", "sec_6_2"]

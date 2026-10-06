@@ -58,6 +58,18 @@ def _check_id(value: str) -> str:
     return value
 
 
+# Word caps bookmark names at 40 characters.
+_BOOKMARK_MAX = 40
+
+
+def bookmark_name(section_id: str) -> str:
+    """Word bookmark for a section id: '-' -> '_', '.' -> '__' (``sec-6.2`` -> ``sec_6__2``).
+
+    Ids never hold '_' or an empty segment, so distinct ids get distinct bookmarks.
+    """
+    return section_id.replace("-", "_").replace(".", "__")
+
+
 def make_doc_id(company: str, doc_number: str, language: str, revision: str) -> str:
     """Run-independent document id: ``kalvora-dental:KD-SM-CF600-EN:en:rev-C``."""
     slug = re.sub(r"[^a-z0-9]+", "-", company.lower()).strip("-")
@@ -253,6 +265,10 @@ class DocumentIR(BaseModel):
 
         for s, _, _ in self.walk():
             claim(s.id)
+            if len(bookmark_name(s.id)) > _BOOKMARK_MAX:
+                raise ValueError(
+                    f"document {self.doc_id}: section id {s.id!r} is too long for a Word bookmark"
+                )
             for b in s.blocks:
                 claim(b.id)
                 if isinstance(b, Procedure):

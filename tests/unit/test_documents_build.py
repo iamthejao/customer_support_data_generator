@@ -163,6 +163,18 @@ def test_shared_and_case_documents_must_not_document_agent_only_causes() -> None
     assert len(result.documents) == 1
 
 
+def test_documents_must_serve_a_known_problem_or_case() -> None:
+    # An unknown anchor would otherwise hide the agent_only causes from the check.
+    ctx = _ctx(coverage={"run:p:0000": {"loose connector": "agent_only"}})
+    article = kb_article("Kalvora Dental", "run:p:0000", 0)
+    stale = article.model_copy(update={"problem_id": "run:p:9999"})
+    with pytest.raises(ValueError, match="unknown problem run:p:9999"):
+        run_builders(ctx, [_Fixed("f", BuildResult(documents=[BuiltDocument(document=stale)]))])
+    log = article.model_copy(update={"tier": "case", "problem_id": None, "case_uid": "nope"})
+    with pytest.raises(ValueError, match="unknown case nope"):
+        run_builders(ctx, [_Fixed("f", BuildResult(documents=[BuiltDocument(document=log)]))])
+
+
 def test_one_answer_source_per_known_case() -> None:
     twice = BuildResult(
         cases=[

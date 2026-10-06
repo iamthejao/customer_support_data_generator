@@ -5,7 +5,7 @@ What makes the file look like a real manual, and read well in RAG ingesters
 
 * real ``Title`` / ``Heading 1-3`` styles, with the section number typed into
   the heading text (ingesters do not all recompute Word auto-numbering);
-* a bookmark per section named after its IR id (``sec-6.2`` -> ``sec_6_2``);
+* a bookmark per section named after its IR id (``sec-6.2`` -> ``sec_6__2``);
 * safety messages as their own paragraph styles (``Danger``, ``Warning``, ...)
   with a coloured left border, not as one-cell tables;
 * captioned tables with a repeated header row, captioned figures with alt text;
@@ -47,6 +47,7 @@ from csfd.documents.ir import (
     Procedure,
     Section,
     Table,
+    bookmark_name,
 )
 
 # Signal word and colour per safety level (ANSI Z535 colours, softened for print).
@@ -61,11 +62,6 @@ _FIGURE_WIDTH = Cm(14)
 _TABLE_STYLE = "Light Grid Accent 1"
 _STEP_STYLE = "List Paragraph"
 _BULLET_STYLE = "List Bullet"
-
-
-def bookmark_name(section_id: str) -> str:
-    """Word bookmark for a section id (letters, digits and '_' only)."""
-    return section_id.replace(".", "_").replace("-", "_")
 
 
 def render_docx(doc: DocumentIR, assets: Mapping[str, Asset]) -> bytes:

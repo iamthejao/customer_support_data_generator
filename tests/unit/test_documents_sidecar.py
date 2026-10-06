@@ -29,7 +29,7 @@ def test_one_chunk_per_section_with_its_own_text_and_heading_path() -> None:
     assert silver.heading_path == ["6 Calibration", "6.2 Silver test"]
     assert silver.depth == 2
     assert silver.pdf_pages == (2, 3)
-    assert silver.docx_bookmark == "sec_6_2"
+    assert silver.docx_bookmark == "sec_6__2"
     assert silver.covers == ["temperature calibration drift"]
     assert silver.text.startswith("Pure silver melts at 961 °C.")
     # The parent's chunk holds only its own blocks (none here), not the subsection's.
