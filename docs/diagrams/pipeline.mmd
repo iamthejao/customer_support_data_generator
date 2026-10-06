@@ -6,13 +6,15 @@ config:
 graph TD;
 	__start__([<p>__start__</p>]):::first
 	init_run(init_run)
+	build_registry(build_registry)
 	phase1(phase1)
 	phase2(phase2)
 	finalize_run(finalize_run)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> init_run;
-	init_run -. &nbsp;generate&nbsp; .-> phase1;
-	init_run -. &nbsp;reuse&nbsp; .-> phase2;
+	build_registry -. &nbsp;generate&nbsp; .-> phase1;
+	build_registry -. &nbsp;reuse&nbsp; .-> phase2;
+	init_run --> build_registry;
 	phase1 --> phase2;
 	phase2 --> finalize_run;
 	finalize_run --> __end__;

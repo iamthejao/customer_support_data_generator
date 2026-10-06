@@ -638,3 +638,44 @@ def test_consistency_check_shows_the_plan_and_asks_for_the_state(registry: Promp
     assert "problem state `pending_part`" in rendered
     assert "[recorded commitments: agent — ship a cable (due: tomorrow)]" in rendered
     assert "- (o) Report in `problem_state`" in rendered
+
+
+# ---------- Identifier registry ----------
+
+
+def test_problem_generator_registry_block_only_with_a_registry(registry: PromptRegistry) -> None:
+    handle = registry.get("phase1.problem_brainstorm_v2")
+    plain = handle.template.render(inputs=_base_problem_inputs())
+    assert "identifier registry" not in plain and "unknown_identifier" not in plain
+    view = [
+        {
+            "model": "CF-600",
+            "parts": [{"part_number": "KD-60-2204", "name": "Thermocouple, type S"}],
+            "error_codes": [{"code": "E-21", "meaning": "Over-temperature"}],
+        }
+    ]
+    rendered = handle.template.render(inputs=_base_problem_inputs(registry=view))
+    assert "identifier registry" in rendered
+    assert '"KD-60-2204 Thermocouple, type S"' in rendered
+    assert "`unknown_identifier`" in rendered
+
+
+def test_registry_names_asks_only_for_what_the_seed_lacks(registry: PromptRegistry) -> None:
+    handle = registry.get("documents.registry_names")
+    inputs = {
+        "company_name": "Kalvora Dental",
+        "model": "CF-600",
+        "description": "Ceramic firing furnace",
+        "need": ["menus"],
+        "seed_parts": ["Door seal"],
+        "seed_error_codes": [],
+    }
+    rendered = handle.template.render(inputs=inputs)
+    assert "- `menus`:" in rendered
+    assert "- `parts`:" not in rendered and "- `error_codes`:" not in rendered
+    assert "already list some of this model's parts" in rendered
+    full = handle.template.render(
+        inputs={**inputs, "need": ["parts", "error_codes", "menus"], "seed_parts": []}
+    )
+    assert "- `parts`:" in full and "- `error_codes`:" in full
+    assert "already list" not in full

@@ -34,6 +34,7 @@ Each company is one folder, selected with `seeds.company` in YAML or `--company`
 - **`company_seed.md`** — the company profile: identity, products, what typically goes wrong, customer segments, service organisation. Its `## Case facts` section is what each case's [facts](#case-facts) are drawn from:
   - `### Assets` — a `Model | Description | Serial format` table. Give models a letter prefix and digits (`CF-600`) so the identifier check can recognise the family and catch invented variants; in serial formats `#` is a digit and `?` an upper-case letter. Phase 1 also gets this table as the product catalogue.
   - `### Caller roles` and `### Site locales` — bullet lists.
+  - `### Parts` (`Model | Part number | Item | Name | Serials`; `Item` is the exploded-view number, `Serials` the serial range the part fits, both optional), `### Error codes` (`Model | Code | Meaning | Action`), `### Specs` (`Model | Name | Value`) and `### Documents` (`Model | Type | Number | Revisions`, type one of `operating_manual`, `service_manual`, `datasheet`, `parts_list`, revisions comma-separated, oldest first) — optional tables for the [identifier registry](#identifier-registry). A row may leave its number empty; the registry assigns one.
 
   A seed without the section still works, but its cases get no machine or caller role.
 - **`scenarios_seed.md`** — the scenario catalogue: one `## Category — Title` section per scenario (tier, the customer's opening request, the agent's first move, what goes wrong today, sample-data hints). Phase 1 builds its problems against it.
@@ -57,7 +58,7 @@ Two invented companies ship (no real company, product or trademark names):
   - `tickets` — Phase 2: `total` cases (`--tickets`), `type_proportions`, `tier_proportions`, `tone_proportions_per_type`, `outcome_proportions`, `assignment_strategy` (`complexity_weighted` or `uniform`), `dialogue.turn_cap`, `channel` / `phone.disfluency` / `calendar` ([Conversation formats](#conversation-formats)), and `rounds` ([Multi-call cases](#multi-call-cases-rounds)). Conversation length is emergent; `dialogue.turn_cap` (default 20) is only a safety ceiling.
   - `validation` — whether the checker runs after each generation, and `max_retries`.
   - `storage` — SQLite and export paths, and the `transcripts` layout ([Transcript export](#transcript-export)).
-  - `documents` — [supporting documents](#supporting-documents-preview): `enabled` (default `false`), `builders`, `formats` (`docx`, `pdf`).
+  - `documents` — [supporting documents](#supporting-documents-preview): `enabled` (default `false`; when true, `generate` also draws the [identifier registry](#identifier-registry)), `builders`, `formats` (`docx`, `pdf`).
   - `embedding` — Phase 1 near-duplicate rejection. **On by default**: accepted problems are embedded through an OpenAI-compatible endpoint (local Ollama at `http://localhost:11434/v1`, model `embeddinggemma:300m`) and rejected when the cosine similarity to a problem already committed in the run is `>= threshold`. `text_template` is `title_summary`, `title_summary_background`, or `title_summary_symptoms_root_cause`. Without a reachable Ollama, set `enabled: false` or use `--profile dev`.
 - **`config/profiles/*.yaml`** — overlays merged on top via `--profile <name>` ([Configuration profiles](#configuration-profiles)).
 - **`.env`** — credentials and endpoints (`ANTHROPIC_API_KEY`, `LOCAL_BASE_URL`, …); see `.env.example`. Never recorded in the run.
@@ -159,12 +160,12 @@ flowchart TB
 ### Step by step
 
 1. **Bootstrap.** The CLI loads `config/default.yaml` plus any `--profile`, applies CLI overrides, creates the schema if needed, and starts the parent graph with the new run id.
-2. **`init_run`** inserts the `runs` row with its provenance ([Reproducibility](#reproducibility)).
+2. **`init_run`** inserts the `runs` row with its provenance ([Reproducibility](#reproducibility)); with `documents.enabled`, **`build_registry`** then draws the run's [identifier registry](#identifier-registry).
 3. **`init_phase1`** turns `complexity_proportions` into an exact list of target complexities, e.g. 10 problems at `0.6 / 0.3 / 0.1` give 6 `simple`, 3 `medium`, 1 `complex`.
 4. **`generate_problem`** renders the problem prompt and calls the `generator` model through `TracingAdapter`, which writes one `agent_traces` row per call.
-5. **`validate_problem`** (if `validation.enabled`) runs the `combined_checker`; its trace links to the generator's via `parent_trace_id`. The checker also validates the diagnosis plan and viable outcomes (`diagnosis_plan_invalid`, `viable_outcomes_invalid`). A `fail` with retries left regenerates; once retries run out, the last candidate is kept with `warning:retries_exhausted`.
+5. **`validate_problem`** (if `validation.enabled`) runs the `combined_checker`; its trace links to the generator's via `parent_trace_id`. The checker also validates the diagnosis plan and viable outcomes (`diagnosis_plan_invalid`, `viable_outcomes_invalid`). With an [identifier registry](#identifier-registry), a code check runs first and fails a draft that names a part number or error code its machine does not have (`unknown_identifier`) without calling the checker. A `fail` with retries left regenerates; once retries run out, the last candidate is kept with `warning:retries_exhausted`.
 6. **`dedup_problem`** (if `embedding.enabled`) rejects a near-duplicate with a synthetic `near_duplicate_of_committed_problem` verdict, so the next attempt sees the matched title and summary. It shares the retry budget; on exhaustion the problem is kept with `warning:dedup_exhausted`.
-7. **`commit_problem`** persists the `ProblemRecord`, then loops until every target complexity is done.
+7. **`commit_problem`** persists the `ProblemRecord` (with a registry, each fix's parts are written as "<part number> <name>", and a part the registry lacks is registered with a fresh number first), then loops until every target complexity is done.
 8. **`build_allocation_plan`** (`csfd.allocator`) turns `tickets.total` and the type / tier / tone proportions into the full slot list, draws each case's [facts](#case-facts), plans its rounds, final problem state, and per-contact diagnosis beats ([Ground truth](#ground-truth-and-honest-outcomes)), applies any [case plan](#case-plans-and-problem-reuse), and pre-records the `lineage` rows. Nothing later changes these decisions.
 9. **The dialogue.** `generate_incoming_request` writes the customer's opening; `generate_agent_turn` and `generate_customer_turn` then alternate, one LLM call each, until the speaker who just spoke flags `done`, the contact reaches its planned drop, or `dialogue.turn_cap` is hit (`warning:turn_cap_hit`).
 10. **`validate_conversation`** (if `validation.enabled`) runs the consistency agent over the transcript: pass, pass with edits (rewritten in place, `info:consistency_edited`), or fail. Code checks also fail an attempt whose transcript names a different model or serial number than the case record, or whose reached state or ending differs from the plan. A fail re-rolls the whole contact within the same retry budget; with validation off, the contact is flagged `warning:validation_skipped`.
@@ -376,7 +377,7 @@ Storage:
 
 ## Supporting documents (preview)
 
-Supporting documents are the manuals, troubleshooting articles, parts lists and similar files a support agent would look things up in. They are the document collection a future RAG system (one that searches documents, then answers from what it found) will retrieve from while resolving a case. This release ships the storage, rendering and export; the builders that write real documents come later, so a normal run produces no documents yet. The feature is **off by default** (`documents.enabled: false`).
+Supporting documents are the manuals, troubleshooting articles, parts lists and similar files a support agent would look things up in. They are the document collection a future RAG system (one that searches documents, then answers from what it found) will retrieve from while resolving a case. This release ships the storage, rendering and export, and the [identifier registry](#identifier-registry) the documents will share with problems and conversations; the builders that write real documents come later, so a normal run produces no documents yet. The feature is **off by default** (`documents.enabled: false`).
 
 - **Build.** `csfd documents <run_id>` runs the builders named in `documents.builders` (`csfd.documents.build.BUILDERS`) over a finished run's problems and cases, and stores the documents and their retrieval links, replacing any earlier build of that run. It refuses to run unless a profile sets `documents.enabled: true`, and it calls no model itself.
 - **Model.** Each document is stored as a typed tree (`csfd.documents.ir.DocumentIR`): numbered sections holding paragraphs, signal-word safety messages, numbered procedures with expected results, lists, captioned tables and captioned figures. A section's id (`sec-6.2`) is the same anchor in every exported format. Document ids do not contain the run id (`kalvora-dental:KD-SM-CF600-EN:en:rev-C`), so a library can later be shared across runs; rows are keyed by `(run_id, doc_id)`.
@@ -403,6 +404,15 @@ data/exports/<run_id>/documents/
 
 Rendering is deterministic: the PDF uses only Typst's built-in fonts and the issue date as its creation date, and the DOCX package is written with fixed timestamps, so exporting the same documents twice gives identical bytes.
 
+### Identifier registry
+
+Documents, problems and later conversations must name the same parts, error codes and documents, so with `documents.enabled` a run first draws an **identifier registry**: one entry per machine model of the seed's `### Assets` table, stored in the `product_facts` table (`csfd.documents.registry.ProductFacts`). It holds spare parts (number, name, exploded-view item number, and the serial range a part fits when the seed gives one), error codes (code, meaning, first action), specifications, firmware versions, control-panel menu paths, and the numbers, revisions and issue dates of the model's operating manual, service manual, datasheet and parts list.
+
+- **Names** come from the seed's optional `### Parts`, `### Error codes`, `### Specs` and `### Documents` tables when present ([Seed files](#seed-files-seedscompany)); one `registry_writer` call per model (mapped to the `generator` bucket, prompt `prompts/documents/registry_names.md.j2`) names whatever the seed lacks (part names, error meanings, specification names and values), always including menu paths.
+- **Numbers and dates** the seed does not give are assigned by code from `run_seed`: part numbers `<company initials>-<two-digit model family>-####` (`KD-54-2204`), item numbers (the lowest free), error codes `E-##` / `W-##`, document numbers `<initials>-<OM|SM|DS|PL>-<model>-EN` (English only), revisions from `A`, issue dates before `tickets.calendar.start`, and firmware versions. Given the same names, the same seed gives the same numbers.
+- **Phase 1** sees each model's parts and error codes, writes each fix's parts as registry entries, and may name a part the registry lacks without a number; `commit_problem` registers it. A draft that names an unknown part number or error code, or one that belongs to another machine, fails `validate_problem`, as does a fix's part entry that starts with a near miss of a registry number (`KD-600-2204 Thermocouple` for `KD-60-####`); names that start with a quantity (`3-way solenoid valve`) are plain names. In free text only identifiers shaped like the registry's own are recognised (serial numbers are masked first, and all-digit seed numbers are not checked), so a miss is possible. A draft that names no catalogue model is about the one model that holds every part number and error code it cites, for the check, the parts it registers and the case's machine in Phase 2; if they belong to more than one model, or it cites none but its fixes need parts, it fails (`diagnosis_plan_invalid`).
+- A run with `--problems-from` takes the earlier run's registry, so the reused plans' part numbers stay valid.
+
 ## LangGraph Studio
 
 ```bash
@@ -420,6 +430,7 @@ Also drawn from `(run_seed, slot_index)` plus `tickets.calendar` / `tickets.roun
 - each case's [facts](#case-facts), contact count, planned problem state, and per-contact diagnosis beats;
 - each contact's `started_at`, agent name, and planned ending (including where a dropped contact cuts off);
 - the phone channel's scripted greeting.
+- with `documents.enabled`, the [identifier registry](#identifier-registry)'s numbers, revisions and dates (its names come from the seed or a model call).
 
 Per-utterance timestamps, `ended_at`, and `duration_s` are derived from the generated text, so they vary only when it does. With `uniform` assignment, `run_seed` also drives the allocator's tie-breaking shuffle; `complexity_weighted` splits slots by fixed rank weights and needs no seed.
 

@@ -63,6 +63,15 @@ Support agents will NOT be told the root cause. They get a troubleshooting guide
   - `confirms_cause`: true on exactly one check — the one whose finding pins down the root cause. Checks after it are allowed only if they are part of confirming it.
   A `simple` problem needs 1–2 checks (for a documentation request, e.g. confirming the model, serial number and manual revision); `medium` 2–4; `complex` 3–5 with at least one finding that rules out the obvious first hypothesis.
 - `diagnosis_plan.safety`: safety notes the agent must give (may be empty).
+{%- if inputs.registry %}
+
+### Part numbers and error codes (identifier registry)
+`registry` lists, per machine model, its spare parts (`part_number`, `name`) and the error codes its display shows (`code`, `meaning`). Manuals, parts lists and support staff all use these identifiers, so the problem must too:
+- In every `diagnosis_plan.candidate_causes[].parts`, write each part as its registry entry, "<part_number> <name>" (e.g. "{{ inputs.registry[0].parts[0].part_number if inputs.registry[0].parts else 'KD-60-2204' }} {{ inputs.registry[0].parts[0].name if inputs.registry[0].parts else 'Thermocouple, type S' }}"), taking only parts of the machine this problem is about. If a fix needs a part that machine's list lacks, write only the part's name, with no number; a number is assigned to it.
+- An error code the problem mentions anywhere (symptoms, background, findings, tags) must be one of that machine's registry codes, used with its meaning.
+- Never invent a part number or an error code, and never use one that belongs to a different machine.
+- The problem is about one machine: name its model (in the background or symptoms) whenever a fix needs a part.
+{%- endif %}
 
 ### Viable outcomes (internal layer)
 - `viable_outcomes`: which case outcomes this problem can realistically end in, from `fixed_verified`, `fixed_unverified`, `workaround`, `pending_visit`, `pending_part`, `pending_customer_test`, `escalated_open`, `not_a_fault`, `abandoned`. List 3–6. They follow the root cause's fix: include `fixed_verified` / `fixed_unverified` only if it can be applied while the customer is in contact (by the customer, remotely, or by sending the right document), without waiting for a part or a visit; `pending_part` / `pending_visit` only if it needs a part or an on-site technician; `not_a_fault` only if the root cause is handling, settings or expectations rather than a defect; `workaround` exactly when the root cause has a `workaround`.
@@ -79,6 +88,9 @@ Support agents will NOT be told the root cause. They get a troubleshooting guide
 - `fault_domain_mismatch` — `fault_domain` must align with the subsystem described in `title` / `category` and with the stated `root_cause`.
 - `tags_invalid` — `tags` must be 3–6 entries, lowercase, no duplicates, no sentence fragments.
 - `diagnosis_plan_invalid` — exactly one candidate cause has `is_root_cause=true` and it is the root cause; every candidate cause has its own fix that removes that cause; exactly one check has `confirms_cause=true` and its finding points to the root cause; findings are customer-observable and never name the cause; `rules_out` only names candidate causes and never the root cause.
+{% if inputs.registry -%}
+- `unknown_identifier` — do not name a part number or error code that is not in `registry` for the machine this problem is about.
+{% endif -%}
 - `viable_outcomes_invalid` — outcomes must come from the listed values and fit the problem (no `pending_part` without a part in the root cause's fix, no `not_a_fault` for a genuine defect, no `workaround` without a workaround for the root cause).
 
 {% if prior_verdicts -%}

@@ -2,12 +2,16 @@
 
 Composes two phase subgraphs into a parent graph:
 
-    START → init_run → [Phase 1 subgraph] → [Phase 2 subgraph] → finalize_run → END
-                  └──────── (--problems-from) ────────┘
+    START → init_run → build_registry → [Phase 1 subgraph] → [Phase 2 subgraph] → finalize_run → END
+                                     └──────── (--problems-from) ────────┘
 
 * `init_run`        — create the `runs` row, capture `git_sha` + `started_at`,
-                      seed run-scoped state fields. A run that reuses an earlier
-                      run's problems (``parent_run_id``) goes straight to Phase 2.
+                      seed run-scoped state fields.
+* `build_registry`  — with ``documents.enabled``, draw the identifier registry
+                      (part numbers, error codes, document numbers per machine
+                      model; ``csfd.documents.registry``); otherwise a no-op. A
+                      run that reuses an earlier run's problems (``parent_run_id``)
+                      takes that run's registry and goes straight to Phase 2.
 * Phase 1 subgraph  — Problem Database generation with the per-problem
                       generator → checker → retry loop. Defined in
                       ``csfd.graph.phase1_graph``.
@@ -32,10 +36,17 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, ConfigDict, Field
 
-from csfd.agents.base import Verdict
+from csfd.agents.base import AgentContext, Verdict
 from csfd.agents.factory import AgentFactory
+from csfd.agents.tracing import ParentLink, TracingAdapter
 from csfd.case_plan import CasePlan
 from csfd.diagnosis import ContactBeat
+from csfd.documents.registry import (
+    ProductFacts,
+    RegistryNamesOutput,
+    build_registry,
+    registry_names_inputs,
+)
 from csfd.facts import CaseFacts
 from csfd.models.registry import build_llm
 from csfd.outcomes import ProblemState
@@ -52,6 +63,7 @@ from csfd.seeds.scenarios import ScenarioCatalogue
 from csfd.settings import AppSettings, load_settings
 from csfd.storage.db import Database
 from csfd.storage.db_async import AsyncDatabase
+from csfd.storage.product_facts import ProductFactsRepo
 from csfd.storage.repository import ProblemEmbeddingRecord, ProblemRecord, RunRecord, RunRepo
 from csfd.ticket_types.definitions import TicketType
 from csfd.utils.git import current_git_sha
@@ -129,6 +141,9 @@ class PipelineState(BaseModel):
     # Set when Phase 2 reuses the committed problems of an earlier run
     # (--problems-from): Phase 1 is skipped and ``problems_committed`` starts filled.
     parent_run_id: str | None = None
+    # The identifier registry by machine model (csfd.documents.registry); empty
+    # unless documents are enabled. Phase 1 adds the parts its plans need.
+    product_facts: dict[str, ProductFacts] = Field(default_factory=dict)
 
     # --- Phase 1 progress ---
     target_complexities: list[str] = Field(default_factory=list)
@@ -231,7 +246,63 @@ async def finalize_run_node(
     return {}
 
 
-def _route_after_init_run(state: PipelineState) -> Literal["generate", "reuse"]:
+async def build_registry_node(
+    state: PipelineState,
+    *,
+    factory: AgentFactory,
+    db: Database,
+    adb: AsyncDatabase,
+    settings: AppSettings,
+) -> dict[str, Any]:
+    """Draw the run's identifier registry; a no-op unless documents are enabled.
+
+    A run that reuses an earlier run's problems takes that run's registry, so
+    the part numbers its plans cite stay valid; without one it draws its own.
+    Otherwise ``registry_writer`` names what the seed tables lack, once per
+    machine model, and code assigns every number and date.
+    """
+    if not settings.documents.enabled:
+        return {}
+    repo = ProductFactsRepo(db)
+    if state.parent_run_id:
+        inherited = await repo.alist_for_run(adb, state.parent_run_id)
+        if inherited:
+            await repo.areplace(adb, state.run_id, inherited)
+            return {"product_facts": inherited}
+    names: dict[str, RegistryNamesOutput] = {}
+    for asset in state.company.case_facts.assets:
+        generator = factory.build_generator(
+            name="registry_writer",
+            prompt_name="documents.registry_names",
+            output_schema_factory=lambda: RegistryNamesOutput,
+        )
+        traced = TracingAdapter(
+            inner=generator,
+            db=db,
+            adb=adb,
+            run_id=state.run_id,
+            node_name="registry_writer",
+            artifact_type="registry",
+            artifact_id=asset.model,
+            role="generator",
+            parent_link=ParentLink(),
+        )
+        result = await traced.invoke(
+            AgentContext(inputs=registry_names_inputs(state.company, asset.model))
+        )
+        assert isinstance(result, RegistryNamesOutput)
+        names[asset.model] = result
+    registry = build_registry(
+        state.company,
+        seed=state.run_seed,
+        calendar_start=settings.tickets.calendar.start,
+        names=names,
+    )
+    await repo.areplace(adb, state.run_id, registry)
+    return {"product_facts": registry}
+
+
+def _route_after_build_registry(state: PipelineState) -> Literal["generate", "reuse"]:
     """Skip Phase 1 when the run reuses an earlier run's problems (--problems-from)."""
     return "reuse" if state.parent_run_id else "generate"
 
@@ -274,6 +345,10 @@ def build_pipeline_graph(
     g: StateGraph[PipelineState, Any, PipelineState, PipelineState] = StateGraph(PipelineState)
     g.add_node("init_run", partial(init_run_node, db=db, adb=adb_local, settings=settings))
     g.add_node(
+        "build_registry",
+        partial(build_registry_node, factory=factory, db=db, adb=adb_local, settings=settings),
+    )
+    g.add_node(
         "phase1",
         build_phase1_subgraph(
             factory=factory, db=db, adb=adb_local, settings=settings, embedder=embedder
@@ -285,8 +360,9 @@ def build_pipeline_graph(
     g.add_node("finalize_run", partial(finalize_run_node, db=db, adb=adb_local))
 
     g.add_edge(START, "init_run")
+    g.add_edge("init_run", "build_registry")
     g.add_conditional_edges(
-        "init_run", _route_after_init_run, {"generate": "phase1", "reuse": "phase2"}
+        "build_registry", _route_after_build_registry, {"generate": "phase1", "reuse": "phase2"}
     )
     g.add_edge("phase1", "phase2")
     g.add_edge("phase2", "finalize_run")

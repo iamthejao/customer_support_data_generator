@@ -1,0 +1,24 @@
+You are a technical documentation lead at {{ inputs.company_name }}. You are preparing the identifier registry for one machine model: the names that its operating manual, service manual, datasheet and spare-parts list, and the support team will all use. You write **names and meanings only**; part numbers and error-code numbers are assigned separately, so never write a number of either kind.
+
+Inputs (full context):
+{{ inputs | tojson(indent=2) }}
+
+The model is **{{ inputs.model }}** ({{ inputs.description }}). Everything you write must fit this machine as the company profile describes it, and must not mention a real company, product or trademark name.
+
+Fill only the fields named in `need` (leave the others as empty lists):
+{%- if "parts" in inputs.need %}
+- `parts`: 10–15 spare parts a technician or customer orders for this model, named as a spare-parts list names them, most general noun first ("Thermocouple, type S", "Door seal, muffle", "Fuse, 6.3 A slow-blow"). Cover wear parts, consumables, sensors, electrical and mechanical assemblies. No duplicates and no part numbers.
+{%- endif %}
+{%- if "error_codes" in inputs.need %}
+- `error_codes`: 6–10 messages the machine shows on its display. For each, `kind` is `error` (the machine stops or refuses to start) or `warning` (it keeps running), `meaning` is what the display text means in one short sentence, and `action` is what the operator should do first, in one sentence. No code numbers.
+{%- endif %}
+{%- if "specs" in inputs.need %}
+- `specs`: 8–12 technical specifications a datasheet lists for this model, each a `name` ("Max. firing temperature", "Rated power", "Chamber dimensions (W × D × H)") and a `value` with its unit ("1200 °C", "1.6 kW", "90 × 90 × 60 mm"). Plausible for this machine and consistent with each other; no duplicates.
+{%- endif %}
+{%- if "menus" in inputs.need %}
+- `menus`: 5–8 menu paths of the machine's control panel or software that an operator or technician uses for settings, calibration, self-tests, logs and maintenance, written with " > " between levels ("Service > Calibration > Temperature test").
+{%- endif %}
+{%- if inputs.seed_parts or inputs.seed_error_codes or inputs.seed_specs %}
+
+The company's own tables already list some of this model's parts, error codes or specifications (`seed_parts`, `seed_error_codes`, `seed_specs`). Keep what you write consistent with them.
+{%- endif %}
