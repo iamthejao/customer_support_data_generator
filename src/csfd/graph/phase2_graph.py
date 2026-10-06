@@ -106,6 +106,7 @@ from csfd.diagnosis import (
     customer_findings,
     plan_beats,
 )
+from csfd.documents.registry import problem_model, text_values
 from csfd.facts import (
     CaseFacts,
     crm_view,
@@ -398,6 +399,19 @@ def _problem_text(problem: ProblemRecord) -> str:
     )
 
 
+def _problem_model(state: PipelineState, problem: ProblemRecord) -> str | None:
+    """With an identifier registry, the model a problem is about, also when its text
+    names none but its registry identifiers belong to one model (as Phase 1 decided)."""
+    if not state.product_facts:
+        return None
+    return problem_model(
+        _problem_text(problem),
+        text_values(problem.diagnosis_plan),
+        state.product_facts,
+        state.company.case_facts,
+    )
+
+
 def _diagnosis_plan(problem: ProblemRecord) -> DiagnosisPlan | None:
     """The problem's canonical diagnosis plan; None for a problem written without one."""
     return DiagnosisPlan.model_validate(problem.diagnosis_plan) if problem.diagnosis_plan else None
@@ -476,6 +490,7 @@ async def build_allocation_plan_node(
             seed=seed,
             slot_index=s.index,
             problem_text=_problem_text(problems_by_id[s.problem_id]),
+            asset_model=_problem_model(state, problems_by_id[s.problem_id]),
         )
         for s in slots
     }

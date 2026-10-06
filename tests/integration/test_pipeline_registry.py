@@ -112,12 +112,14 @@ def _expected_registry(settings: AppSettings) -> dict[str, ProductFacts]:
 
 
 def _problem(
-    parts: list[str], symptom: str = "The display shows an error"
+    parts: list[str],
+    symptom: str = "The display shows an error",
+    background: str = "Our CF-600 over-fires every crown since Monday.",
 ) -> ProblemBrainstormOutput:
     return ProblemBrainstormOutput(
         title="Restorations come out over-fired",
         summary="Crowns come out glassy.",
-        background="Our CF-600 over-fires every crown since Monday.",
+        background=background,
         symptoms=[symptom],
         root_cause=["Thermocouple drift"],
         category="firing",
@@ -269,3 +271,71 @@ def test_disabled_documents_draw_no_registry(tmp_path: Path) -> None:
     traces = AgentTraceRepo(db).list_for_run(run_id)
     generator = next(t for t in traces if t.agent_role == "generator")
     assert "registry" not in json.loads(generator.input_json)
+
+
+NO_MODEL = "Our furnace over-fires every crown since Monday."
+
+
+def test_a_draft_naming_no_model_is_about_the_owner_of_its_part_numbers(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, enabled=True)
+    db = Database(path=Path(settings.storage.sqlite_path))
+    apply_migrations(db)
+    expected = _expected_registry(settings)
+    cf, sx = expected["CF-600"], expected["SX-1500"]
+    fake = FakeChatModel(
+        structured={Verdict: Verdict(checker="fake", passed=True, issues=[])},
+        structured_seq={
+            RegistryNamesOutput: [NAMES, NAMES],
+            ProblemBrainstormOutput: [
+                # Parts of two machines and no model named: fails the code check.
+                _problem([cf.parts[0].part_number, sx.parts[1].part_number], background=NO_MODEL),
+                # New parts but no identifier and no model named: fails too.
+                _problem(["Heating element, 230 V"], background=NO_MODEL),
+                # A CF-600 part only: the problem is about the CF-600.
+                _problem([cf.parts[0].part_number, "Heating element, 230 V"], background=NO_MODEL),
+            ],
+        },
+    )
+    run_id = _run(settings, db, fake)
+
+    stored = ProductFactsRepo(db).list_for_run(run_id)
+    assert stored["SX-1500"] == sx
+    new_part = stored["CF-600"].parts[-1]
+    assert new_part.name == "Heating element, 230 V"
+    [problem] = ProblemRepo(db).list_for_run(run_id)
+    assert problem.quality_flag is None
+    assert problem.diagnosis_plan is not None
+    root = problem.diagnosis_plan["candidate_causes"][0]
+    assert root["parts"] == [cf.parts[0].entry, new_part.entry]
+
+    traces = AgentTraceRepo(db).list_for_run(run_id)
+    problem_traces = [t for t in traces if t.artifact_type == "problem"]
+    assert len([t for t in problem_traces if t.agent_role == "generator"]) == 3
+    # The first two drafts failed the code check; only the third reached the checker.
+    assert [t.attempt for t in problem_traces if t.agent_role == "checker"] == [2]
+
+
+def test_a_near_miss_part_number_is_retried_not_registered(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, enabled=True)
+    db = Database(path=Path(settings.storage.sqlite_path))
+    apply_migrations(db)
+    expected = _expected_registry(settings)
+    cf = expected["CF-600"]
+    near_miss = "KD-600-2204 Thermocouple, type S"
+    fake = FakeChatModel(
+        structured={Verdict: Verdict(checker="fake", passed=True, issues=[])},
+        structured_seq={
+            RegistryNamesOutput: [NAMES, NAMES],
+            ProblemBrainstormOutput: [_problem([near_miss]), _problem([cf.parts[0].entry])],
+        },
+    )
+    run_id = _run(settings, db, fake)
+    assert ProductFactsRepo(db).list_for_run(run_id) == expected
+    [problem] = ProblemRepo(db).list_for_run(run_id)
+    assert problem.diagnosis_plan is not None
+    assert problem.diagnosis_plan["candidate_causes"][0]["parts"] == [cf.parts[0].entry]
+    traces = AgentTraceRepo(db).list_for_run(run_id)
+    checker = [
+        t.attempt for t in traces if t.artifact_type == "problem" and t.agent_role == "checker"
+    ]
+    assert checker == [1]

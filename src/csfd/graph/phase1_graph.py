@@ -48,7 +48,15 @@ from langgraph.graph.state import CompiledStateGraph
 from csfd.agents.base import AgentContext, Issue, Verdict
 from csfd.agents.factory import AgentFactory
 from csfd.agents.tracing import ParentLink, TracingAdapter
-from csfd.documents.registry import phase1_view, register_parts, unknown_identifiers
+from csfd.documents.registry import (
+    cited_models,
+    phase1_view,
+    problem_model,
+    register_parts,
+    text_values,
+    unknown_identifiers,
+    unregistered_part_numbers,
+)
 from csfd.embeddings.client import EmbeddingClient
 from csfd.embeddings.dedup import find_duplicate
 from csfd.embeddings.text import text_for_problem
@@ -70,39 +78,72 @@ from csfd.storage.repository import (
 # Identifier registry helpers
 # --------------------------------------------------------------------------- #
 
-# Rule id of the code check that a problem names only registry identifiers.
+# Rule ids of the code checks that a problem names only registry identifiers,
+# and that a plan citing or declaring parts is about one known machine.
 _UNKNOWN_IDENTIFIER_RULE = "unknown_identifier"
+_PLAN_INVALID_RULE = "diagnosis_plan_invalid"
+
+
+def _problem_text(draft: ProblemBrainstormOutput) -> str:
+    """The draft's free text, read the way Phase 2 reads a committed problem."""
+    return "\n".join(
+        [draft.title, draft.summary, draft.background, *draft.symptoms, *draft.root_cause]
+    )
 
 
 def _problem_model(state: PipelineState, draft: ProblemBrainstormOutput) -> str | None:
-    """The catalogue model the draft is about, read the way Phase 2 reads it."""
-    text = "\n".join(
-        [draft.title, draft.summary, draft.background, *draft.symptoms, *draft.root_cause]
+    """The catalogue model the draft is about, decided the way Phase 2 decides it."""
+    return problem_model(
+        _problem_text(draft),
+        text_values(draft.diagnosis_plan.model_dump(mode="json")),
+        state.product_facts,
+        state.company.case_facts,
     )
-    asset = named_asset(state.company.case_facts, text)
-    return asset.model if asset else None
 
 
-def _strings(value: Any) -> list[str]:
-    """Every string inside a dumped model, for scanning a draft for identifiers."""
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        return [s for v in value.values() for s in _strings(v)]
-    if isinstance(value, list):
-        return [s for v in value for s in _strings(v)]
-    return []
+def _machine_issue(state: PipelineState, draft: ProblemBrainstormOutput) -> str | None:
+    """Why a draft that names no catalogue model is about no single machine, if it is not."""
+    text = _problem_text(draft)
+    if named_asset(state.company.case_facts, text) is not None:
+        return None
+    plan = text_values(draft.diagnosis_plan.model_dump(mode="json"))
+    held = cited_models([text, *plan], state.product_facts, state.company.case_facts)
+    if held is not None and len(held) != 1:
+        return (
+            "The problem names no machine model and cites part numbers or error codes "
+            "of more than one machine; name the machine and use only its identifiers."
+        )
+    if held is None and any(c.parts for c in draft.diagnosis_plan.candidate_causes):
+        return (
+            "The problem names no machine model, so the parts its fixes need cannot be "
+            "registered; name the machine and use its registry parts."
+        )
+    return None
 
 
 def _registry_verdict(state: PipelineState, draft: ProblemBrainstormOutput) -> Verdict | None:
-    """A failing verdict when the draft names a part number or error code the registry lacks."""
+    """A failing verdict when the draft names a part number or error code the registry lacks,
+    or cites or declares parts without being about one machine."""
+    model = _problem_model(state, draft)
     unknown = unknown_identifiers(
-        _strings(draft.model_dump(mode="json")),
+        text_values(draft.model_dump(mode="json")),
         state.product_facts,
-        _problem_model(state, draft),
+        model,
         state.company.case_facts,
     )
-    if not unknown:
+    unknown += unregistered_part_numbers(
+        [p for c in draft.diagnosis_plan.candidate_causes for p in c.parts],
+        state.product_facts,
+        model,
+    )
+    fix = (
+        "Use only part numbers and error codes from `registry` for this machine; "
+        "for a part it lacks, write the part's name without a number."
+    )
+    issues = [(_UNKNOWN_IDENTIFIER_RULE, msg) for msg in unknown]
+    if (machine := _machine_issue(state, draft)) is not None:
+        issues.append((_PLAN_INVALID_RULE, machine))
+    if not issues:
         return None
     return Verdict(
         checker="registry_check",
@@ -111,14 +152,11 @@ def _registry_verdict(state: PipelineState, draft: ProblemBrainstormOutput) -> V
             Issue(
                 severity="error",
                 location=f"problem[{state.problem_index}]",
-                rule_violated=_UNKNOWN_IDENTIFIER_RULE,
+                rule_violated=rule,
                 explanation=msg,
-                suggested_fix=(
-                    "Use only part numbers and error codes from `registry` for this machine; "
-                    "for a part it lacks, write the part's name without a number."
-                ),
+                suggested_fix=fix,
             )
-            for msg in unknown
+            for rule, msg in issues
         ],
     )
 
@@ -216,7 +254,9 @@ async def validate_problem_node(
     """Run the combined checker against the current problem draft.
 
     With an identifier registry, a code check runs first: a draft that names a
-    part number or error code the registry lacks fails without a checker call.
+    part number or error code the registry lacks, or that names no machine but
+    cites identifiers of several machines or declares parts, fails without a
+    checker call.
     """
     i = state.problem_index
     problem_id = f"{state.run_id}:p:{i:04d}"

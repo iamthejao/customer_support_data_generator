@@ -70,6 +70,7 @@ Support agents will NOT be told the root cause. They get a troubleshooting guide
 - In every `diagnosis_plan.candidate_causes[].parts`, write each part as its registry entry, "<part_number> <name>" (e.g. "{{ inputs.registry[0].parts[0].part_number if inputs.registry[0].parts else 'KD-60-2204' }} {{ inputs.registry[0].parts[0].name if inputs.registry[0].parts else 'Thermocouple, type S' }}"), taking only parts of the machine this problem is about. If a fix needs a part that machine's list lacks, write only the part's name, with no number; a number is assigned to it.
 - An error code the problem mentions anywhere (symptoms, background, findings, tags) must be one of that machine's registry codes, used with its meaning.
 - Never invent a part number or an error code, and never use one that belongs to a different machine.
+- The problem is about one machine: name its model (in the background or symptoms) whenever a fix needs a part.
 {%- endif %}
 
 ### Viable outcomes (internal layer)

@@ -55,19 +55,26 @@ def named_asset(catalogue: CaseFactsCatalogue, problem_text: str) -> AssetModel 
 
 
 def draw_case_facts(
-    catalogue: CaseFactsCatalogue, *, seed: int, slot_index: int, problem_text: str = ""
+    catalogue: CaseFactsCatalogue,
+    *,
+    seed: int,
+    slot_index: int,
+    problem_text: str = "",
+    asset_model: str | None = None,
 ) -> CaseFacts:
     """Draw one case's facts deterministically from ``(seed, slot_index)``.
 
-    A model the problem record already names wins, so the facts never contradict
-    the problem; otherwise the model is a seeded pick from the catalogue.
+    ``asset_model`` (the model a problem is about, when known otherwise), or a
+    model the problem record names, wins, so the facts never contradict the
+    problem; otherwise the model is a seeded pick from the catalogue.
     """
     rng = derive_rng(seed, f"case:{slot_index}:facts")
     locale = rng.choice(catalogue.site_locales or [DEFAULT_SITE_LOCALE])
     fake = Faker(locale)
     fake.seed_instance(rng.getrandbits(64))
     picked = rng.choice(catalogue.assets) if catalogue.assets else None
-    asset = named_asset(catalogue, problem_text) or picked
+    known = next((a for a in catalogue.assets if a.model == asset_model), None)
+    asset = known or named_asset(catalogue, problem_text) or picked
     serial = (
         fake.bothify(asset.serial_format, letters=string.ascii_uppercase)
         if asset is not None and asset.serial_format

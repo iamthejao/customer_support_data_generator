@@ -7,6 +7,7 @@ from csfd.seeds.company import (
     SeedDocument,
     SeedErrorCode,
     SeedPart,
+    SeedSpec,
     parse_company_seed,
 )
 
@@ -68,9 +69,16 @@ def test_parse_company_seed_without_case_facts_is_empty(tmp_path: Path) -> None:
 def test_parse_company_seed_reads_registry_tables() -> None:
     catalogue = parse_company_seed(Path("tests/fixtures/registry_company_seed.md")).case_facts
     assert catalogue.parts == [
-        SeedPart(model="AX-100", name="Power supply unit, 240 W", part_number="AC-PSU-001"),
+        SeedPart(
+            model="AX-100",
+            name="Power supply unit, 240 W",
+            part_number="AC-PSU-001",
+            item=4,
+            serials="AX100-00001 to AX100-04999",
+        ),
         SeedPart(model="AX-100", name="Fan tray, front"),
     ]
+    assert catalogue.specs == [SeedSpec(model="AX-100", name="Rated power", value="240 W")]
     assert catalogue.error_codes == [
         SeedErrorCode(
             model="AX-100", meaning="Fan tray failure", code="F-01", action="Replace the fan tray"
