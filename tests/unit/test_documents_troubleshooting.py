@@ -15,7 +15,7 @@ from csfd.documents.build import (
     DocumentLink,
     run_builders,
 )
-from csfd.documents.coverage import Coverage
+from csfd.documents.coverage import Coverage, plan_coverage
 from csfd.documents.ir import DocumentIR
 from csfd.documents.placeholders import PLACEHOLDER
 from csfd.documents.registry import ProductFacts, build_registry, kb_documents
@@ -299,7 +299,10 @@ def test_a_partial_cause_is_listed_without_its_fix(
     kb0, chapter = docs["kb_article:" + P0], docs["service_manual:"]
     assert "| Failed fan tray | - |" in _text(kb0)  # listed, no remedy to point at
     for doc in (kb0, chapter):
-        assert "Watch the fan status LED" not in _text(doc)  # its remedy's own steps
+        # Neither its remedy nor the F-01 action, which states the same fix, is printed.
+        assert "Replace the fan tray" not in _text(doc)
+        assert "Watch the fan status LED" not in _text(doc)
+    assert "| F-01 | Fan tray failure | - |" in _text(kb0)
     with pytest.raises(LookupError):
         _section_titled(kb0, "Failed fan tray")
     links = _links(result, 0)
@@ -403,3 +406,37 @@ def _section_titled(doc: DocumentIR, title: str) -> str:
         if s.title == title and parents and parents[-1].title.startswith("Symptoms"):
             return s.id
     raise LookupError(title)
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_no_undocumented_fix_appears_anywhere_in_the_corpus(
+    company: CompanyProfile, registry: dict[str, ProductFacts], seed: int
+) -> None:
+    """Corpus-wide: no remedy text of a partial or agent-only cause is in any document."""
+    plans = _plans(registry)
+    coverage = plan_coverage(
+        list(plans.items()),
+        {"documented": 0.4, "partial": 0.3, "agent_only": 0.3},
+        seed=seed,
+    )
+    result = _build(_ctx(company, registry, coverage))
+    corpus = "\n".join(_text(b.document) for b in result.documents)
+    documented_fixes = {
+        step
+        for pid, plan in plans.items()
+        for c in plan.candidate_causes
+        if coverage[pid][c.cause] == "documented"
+        for step in c.resolution_steps
+    }
+    for pid, plan in plans.items():
+        for c in plan.candidate_causes:
+            if coverage[pid][c.cause] == "documented":
+                continue
+            for text in [*c.resolution_steps, c.verification, c.workaround]:
+                if text and text not in documented_fixes:
+                    assert text not in corpus, (seed, c.cause, text)
+            if coverage[pid][c.cause] == "agent_only":
+                assert c.cause not in corpus
+    # The registry action that states the fan-tray fix is withheld unless that fix is documented.
+    if coverage[P0]["Failed fan tray"] != "documented":
+        assert "Replace the fan tray" not in corpus

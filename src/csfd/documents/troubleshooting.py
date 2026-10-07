@@ -66,6 +66,7 @@ from csfd.documents.registry import (
     cited_error_codes,
     find_part,
     kb_documents,
+    text_values,
     unknown_identifiers,
 )
 from csfd.storage.repository import ProblemRecord
@@ -92,6 +93,7 @@ class _Problem:
     listed: list[CandidateCause]  # documented or partial, in the guide's order
     documented: list[CandidateCause]  # with a remedy section
     codes: list[ErrorCode] = field(default_factory=list)  # error codes its symptoms show
+    hides_fix: bool = False  # a cause's fix is not documented (partial or agent only)
 
 
 @dataclass
@@ -216,14 +218,45 @@ def _causes_table(table_id: str, caption: str, p: _Problem, remedy_ids: dict[str
     )
 
 
-def _codes_table(table_id: str, caption: str, codes: Sequence[ErrorCode]) -> Table:
+def _codes_table(
+    table_id: str,
+    caption: str,
+    model: str,
+    codes: Sequence[ErrorCode],
+    withheld: set[tuple[str, str]],
+) -> Table:
+    """Codes with their meaning and first action; a ``withheld`` code's action is left out."""
     return Table(
         id=table_id,
         caption=caption,
         columns=["Code", "Meaning", "Action"],
-        rows=[[c.code, c.meaning, c.action or "-"] for c in codes],
+        rows=[
+            [c.code, c.meaning, "-" if (model, c.code) in withheld else c.action or "-"]
+            for c in codes
+        ],
         role="error_codes",
     )
+
+
+def _withheld_actions(problems: Sequence[_Problem], ctx: BuildContext) -> set[tuple[str, str]]:
+    """The ``(model, code)`` pairs whose registry action must not be printed.
+
+    A registry action can state the fix of a cause whose fix is not documented
+    (an error code's "replace the fan tray" is the fix of "failed fan tray"),
+    so every code a problem with a partial or agent-only cause cites, anywhere
+    in its text or plan, is printed without its action.
+    """
+    withheld: set[tuple[str, str]] = set()
+    for p in problems:
+        if not p.hides_fix:
+            continue
+        r = p.record
+        texts = [r.title, r.summary, r.background, *r.symptoms, *text_values(p.plan.model_dump())]
+        models = [p.model] if p.model in ctx.registry else list(ctx.registry)
+        for model in models:
+            assert model is not None
+            withheld |= {(model, c.code) for c in cited_error_codes(texts, ctx.registry[model])}
+    return withheld
 
 
 def _related(facts: ProductFacts | None) -> list[str]:
@@ -236,7 +269,9 @@ def _related(facts: ProductFacts | None) -> list[str]:
     ]
 
 
-def _kb_article(p: _Problem, ref: DocRef, ctx: BuildContext) -> _Built:
+def _kb_article(
+    p: _Problem, ref: DocRef, ctx: BuildContext, withheld: set[tuple[str, str]]
+) -> _Built:
     record, plan = p.record, p.plan
     facts = ctx.registry.get(p.model) if p.model else None
     built_sections: list[Section] = []
@@ -259,7 +294,13 @@ def _kb_article(p: _Problem, ref: DocRef, ctx: BuildContext) -> _Built:
         symptoms.append(Paragraph(id="p-symptoms", text=_sentence(record.title)))
     if p.codes:
         symptoms.append(
-            _codes_table("t-codes", f"Table {n}-1. Codes shown with this symptom", p.codes)
+            _codes_table(
+                "t-codes",
+                f"Table {n}-1. Codes shown with this symptom",
+                p.model or "",
+                p.codes,
+                withheld,
+            )
         )
         codes_section = f"sec-{n}"
     built_sections.append(Section(id=f"sec-{n}", number=n, title="Symptoms", blocks=symptoms))
@@ -363,7 +404,9 @@ def _kb_article(p: _Problem, ref: DocRef, ctx: BuildContext) -> _Built:
     )
 
 
-def _chapter(model: str, problems: list[_Problem], ctx: BuildContext) -> _Built | None:
+def _chapter(
+    model: str, problems: list[_Problem], ctx: BuildContext, withheld: set[tuple[str, str]]
+) -> _Built | None:
     facts = ctx.registry[model]
     ref = next((d for d in facts.documents if d.doc_type == "service_manual"), None)
     if ref is None:
@@ -386,7 +429,11 @@ def _chapter(model: str, problems: list[_Problem], ctx: BuildContext) -> _Built 
                 title="Error and warning codes",
                 blocks=[
                     _codes_table(
-                        "t-codes", f"Table {top}-1. Error and warning codes", facts.error_codes
+                        "t-codes",
+                        f"Table {top}-1. Error and warning codes",
+                        model,
+                        facts.error_codes,
+                        withheld,
                     )
                 ],
             )
@@ -555,13 +602,16 @@ class TroubleshootingBuilder:
             seed=ctx.run_seed,
             calendar_start=ctx.calendar_start,
         )
+        withheld = _withheld_actions(problems, ctx)
         articles: dict[str, _Built] = {
-            p.record.id: _kb_article(p, refs[p.record.id], ctx) for p in problems if p.listed
+            p.record.id: _kb_article(p, refs[p.record.id], ctx, withheld)
+            for p in problems
+            if p.listed
         }
         chapters: dict[str, _Built] = {}
         for model in ctx.registry:
             on_model = [p for p in problems if p.model == model and p.listed]
-            chapter = _chapter(model, on_model, ctx) if on_model else None
+            chapter = _chapter(model, on_model, ctx, withheld) if on_model else None
             if chapter is not None:
                 chapters[model] = chapter
         for pid, built in articles.items():
@@ -609,6 +659,7 @@ class TroubleshootingBuilder:
                     listed=_unique([c for c, lv in levels if lv != "agent_only"]),
                     documented=_unique([c for c, lv in levels if lv == "documented"]),
                     codes=cited_error_codes(texts, facts) if facts else [],
+                    hides_fix=any(lv != "documented" for _, lv in levels),
                 )
             )
         return out
