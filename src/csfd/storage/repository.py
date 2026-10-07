@@ -366,6 +366,12 @@ class ProblemRecord:
     # csfd.outcomes.ProblemState values this problem can end in (empty = any).
     viable_outcomes: list[str] = dataclasses_field(default_factory=list)
 
+    def free_text(self) -> str:
+        """Every free-text field, for spotting a catalogue model the problem names."""
+        return "\n".join(
+            [self.title, self.summary, self.background, *self.symptoms, *self.root_cause]
+        )
+
 
 _PROBLEM_INSERT_SQL = """
     INSERT OR IGNORE INTO problems

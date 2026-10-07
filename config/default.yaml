@@ -117,12 +117,22 @@ storage:
 # Off by default; enable in a profile. When enabled, `csfd generate` also draws the
 # identifier registry (part numbers, error codes, document numbers per machine model;
 # one `registry_writer` call per model) that Phase 1 then uses. `builders` names the
-# document builders to run (none ship yet). Markdown and JSON sidecars are always
-# written; `formats` adds Word and/or PDF (tagged PDF/UA-1).
+# document builders to run: `troubleshooting` writes a KB article per problem and a
+# service-manual troubleshooting chapter per machine model from the diagnosis plans
+# (no model call). Markdown and JSON sidecars are always written; `formats` adds
+# Word and/or PDF (tagged PDF/UA-1).
+# Documentation is incomplete on purpose: `coverage_proportions` split the run's
+# distinct candidate causes (exact counts) into documented (cause, checks and fix),
+# partial (cause and checks, no fix) and agent_only (in no document; only the agent
+# knows the fix). A case's answer source follows its root cause.
 documents:
   enabled: false
-  builders: []
+  builders: [troubleshooting]
   formats: [docx, pdf]
+  coverage_proportions:
+    documented: 0.6
+    partial: 0.2
+    agent_only: 0.2
 
 # Phase 1 near-duplicate rejection: a problem whose embedding has cosine >= threshold
 # to one already committed in the run is regenerated. Needs an OpenAI-compatible

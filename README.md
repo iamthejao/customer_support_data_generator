@@ -58,7 +58,7 @@ Two invented companies ship (no real company, product or trademark names):
   - `tickets` — Phase 2: `total` cases (`--tickets`), `type_proportions`, `tier_proportions`, `tone_proportions_per_type`, `outcome_proportions`, `assignment_strategy` (`complexity_weighted` or `uniform`), `dialogue.turn_cap`, `channel` / `phone.disfluency` / `calendar` ([Conversation formats](#conversation-formats)), and `rounds` ([Multi-call cases](#multi-call-cases-rounds)). Conversation length is emergent; `dialogue.turn_cap` (default 20) is only a safety ceiling.
   - `validation` — whether the checker runs after each generation, and `max_retries`.
   - `storage` — SQLite and export paths, and the `transcripts` layout ([Transcript export](#transcript-export)).
-  - `documents` — [supporting documents](#supporting-documents-preview): `enabled` (default `false`; when true, `generate` also draws the [identifier registry](#identifier-registry)), `builders`, `formats` (`docx`, `pdf`).
+  - `documents` — [supporting documents](#supporting-documents-preview): `enabled` (default `false`; when true, `generate` also draws the [identifier registry](#identifier-registry)), `builders` (default `[troubleshooting]`), `formats` (`docx`, `pdf`), `coverage_proportions` ([troubleshooting documents](#troubleshooting-documents)).
   - `embedding` — Phase 1 near-duplicate rejection. **On by default**: accepted problems are embedded through an OpenAI-compatible endpoint (local Ollama at `http://localhost:11434/v1`, model `embeddinggemma:300m`) and rejected when the cosine similarity to a problem already committed in the run is `>= threshold`. `text_template` is `title_summary`, `title_summary_background`, or `title_summary_symptoms_root_cause`. Without a reachable Ollama, set `enabled: false` or use `--profile dev`.
 - **`config/profiles/*.yaml`** — overlays merged on top via `--profile <name>` ([Configuration profiles](#configuration-profiles)).
 - **`.env`** — credentials and endpoints (`ANTHROPIC_API_KEY`, `LOCAL_BASE_URL`, …); see `.env.example`. Never recorded in the run.
@@ -377,11 +377,11 @@ Storage:
 
 ## Supporting documents (preview)
 
-Supporting documents are the manuals, troubleshooting articles, parts lists and similar files a support agent would look things up in. They are the document collection a future RAG system (one that searches documents, then answers from what it found) will retrieve from while resolving a case. This release ships the storage, rendering and export, and the [identifier registry](#identifier-registry) the documents will share with problems and conversations; the builders that write real documents come later, so a normal run produces no documents yet. The feature is **off by default** (`documents.enabled: false`).
+Supporting documents are the manuals, troubleshooting articles, parts lists and similar files a support agent would look things up in. They are the document collection a future RAG system (one that searches documents, then answers from what it found) will retrieve from while resolving a case. This release ships the storage, rendering and export, the [identifier registry](#identifier-registry) the documents share with problems and conversations, and the [troubleshooting documents](#troubleshooting-documents); manuals and the link from conversations to documents come later. The feature is **off by default** (`documents.enabled: false`).
 
-- **Build.** `csfd documents <run_id>` runs the builders named in `documents.builders` (`csfd.documents.build.BUILDERS`) over a finished run's problems and cases, and stores the documents and their retrieval links, replacing any earlier build of that run. It refuses to run unless a profile sets `documents.enabled: true`, and it calls no model itself.
+- **Build.** `csfd documents <run_id>` runs the builders named in `documents.builders` (`csfd.documents.build.BUILDERS`; default `[troubleshooting]`) over a finished run's problems and cases, and stores the documents and their retrieval links, replacing any earlier build of that run. It refuses to run unless a profile sets `documents.enabled: true`, and it calls no model itself. A run generated without documents has no stored registry; it gets the one code draws from the seed alone (numbers, revisions, dates and the seed tables' parts and codes, without model-named entries).
 - **Model.** Each document is stored as a typed tree (`csfd.documents.ir.DocumentIR`): numbered sections holding paragraphs, signal-word safety messages, numbered procedures with expected results, lists, captioned tables and captioned figures. A section's id (`sec-6.2`) is the same anchor in every exported format. Document ids do not contain the run id (`kalvora-dental:KD-SM-CF600-EN:en:rev-C`), so a library can later be shared across runs; rows are keyed by `(run_id, doc_id)`.
-- **Ground truth.** A builder returns links "case → document section → grade": `resolves` (2), `supports` (1), `equivalent` (the grade of the section it matches) and `hard_negative` (0, a plausible but wrong section). It may also record where a case's answer lives (`documents`, `partial`, or `agent_knowledge` when the fix is known only to the agent). Builders receive per-cause coverage (`documented`, `partial`, `agent_only`) and must not document an `agent_only` cause. None of this is written into documents or transcripts.
+- **Ground truth.** A builder returns links "case → document section → grade": `resolves` (2), `supports` (1), `equivalent` (the grade of the section it matches), `hard_negative` (0, a plausible but wrong section) and `undocumented` (0, no document: the case's root cause, named in the link's `cause`, is fixed only from the agent's knowledge). It also records where a case's answer lives (`documents`, `partial`, or `agent_knowledge`). Builders receive per-cause coverage (`documented`, `partial`, `agent_only`) and must not document an `agent_only` cause. None of this is written into documents or transcripts.
 - **Export.** `csfd export <run_id> --format documents` (also part of `--format all`) renders what was built; a run without documents exports nothing:
 
 ```text
@@ -397,12 +397,24 @@ data/exports/<run_id>/documents/
     corpus.jsonl                 # BEIR layout: one row per section, _id = <doc_id>#<section_id>
     queries.jsonl                # one row per case: the customer's opening message, _id = q:<case_uid>
     qrels/test.tsv               # query-id, corpus-id, integer grade (2 resolves, 1 supports)
-    qrels/test.resolves.tsv      # only the grade-2 pairs
-    qrels_detailed.jsonl         # every link with relation, basis, contact, hard negatives
+    qrels/test.resolves.tsv      # only the grade-2 pairs (none for an agent-knowledge case)
+    qrels_detailed.jsonl         # every link with relation, basis, cause, contact, hard negatives,
+                                 #   and undocumented rows (corpus-id null)
   manifest.json                  # sha256 of every file
 ```
 
 Rendering is deterministic: the PDF uses only Typst's built-in fonts and the issue date as its creation date, and the DOCX package is written with fixed timestamps, so exporting the same documents twice gives identical bytes.
+
+### Troubleshooting documents
+
+The `troubleshooting` builder writes two kinds of document from the problems' diagnosis plans, without a model call:
+
+- a **knowledge-base article per problem** (`<initials>-KB-####`, internal): summary, symptoms with the registry error codes they show, safety notes, a diagnosis section (possible causes and the ordered checks) and one remedy section per documented cause (steps, the check of the result, spare parts with registry numbers, workaround, prevention), then the model's related documents;
+- a **service-manual troubleshooting chapter per machine model** (chapter 5, numbered with the registry's service-manual number and revision): the model's error codes, one symptom section per problem on that model, and one shared remedy section per distinct cause.
+
+Causes appear in the same seeded order as in the agent's guide; no document marks the root cause or states a check's result. Every part number, error code, document number and section cross-reference is resolved by code from placeholders (`csfd.documents.placeholders`), and a document naming an identifier the registry lacks fails the build.
+
+**Documentation is incomplete on purpose**, because much support knowledge lives only in the agent's head. Each distinct candidate cause of the run (compared by text, so a cause shared by several problems gets one value) is `documented` (cause, checks and fix in the documents), `partial` (listed with its checks, no remedy section) or `agent_only` (in no document), in the exact proportions of `documents.coverage_proportions` (default 0.6 / 0.2 / 0.2, seeded from `run_seed`). The root cause's coverage sets each case's answer source (`documents`, `partial`, `agent_knowledge`) and its links: the root cause's remedy sections resolve the case (2) and another problem's article remedying the same cause on the same model is `equivalent` (2); the diagnosis and symptom sections with its checks, and the error-code sections for codes its symptoms show, support it (1); the other causes' remedies are hard negatives (0). A partial or agent-only root cause has no grade-2 link, and an agent-only one gets an `undocumented` link.
 
 ### Identifier registry
 
@@ -430,7 +442,7 @@ Also drawn from `(run_seed, slot_index)` plus `tickets.calendar` / `tickets.roun
 - each case's [facts](#case-facts), contact count, planned problem state, and per-contact diagnosis beats;
 - each contact's `started_at`, agent name, and planned ending (including where a dropped contact cuts off);
 - the phone channel's scripted greeting.
-- with `documents.enabled`, the [identifier registry](#identifier-registry)'s numbers, revisions and dates (its names come from the seed or a model call).
+- with `documents.enabled`, the [identifier registry](#identifier-registry)'s numbers, revisions and dates (its names come from the seed or a model call), and, for `csfd documents`, documentation coverage and the [troubleshooting documents](#troubleshooting-documents) built from a run's problems.
 
 Per-utterance timestamps, `ended_at`, and `duration_s` are derived from the generated text, so they vary only when it does. With `uniform` assignment, `run_seed` also drives the allocator's tie-breaking shuffle; `complexity_weighted` splits slots by fixed rank weights and needs no seed.
 

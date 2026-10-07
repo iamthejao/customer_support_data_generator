@@ -456,7 +456,13 @@ def documents(
         RunRepo(db).get(run_id)
     except KeyError as exc:
         raise typer.BadParameter(f"no run {run_id!r} in {db.path}", param_hint="RUN_ID") from exc
-    result = build_run_documents(db, run_id, builders, seeds_dir=settings.seeds.dir)
+    result = build_run_documents(
+        db,
+        run_id,
+        builders,
+        seeds_dir=settings.seeds.dir,
+        coverage_proportions=settings.documents.coverage_proportions,
+    )
     typer.echo(
         f"Built {len(result.documents)} documents and {len(result.links)} links for run {run_id}."
     )

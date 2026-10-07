@@ -219,16 +219,20 @@ CREATE TABLE IF NOT EXISTS document_assets (
 );
 
 -- Retrieval ground truth: how relevant a document section is to a case (or one
--- of its contacts). Never rendered into documents or transcripts.
+-- of its contacts). Never rendered into documents or transcripts. An
+-- 'undocumented' link records a root cause whose fix is in no document: it has
+-- no doc_id, and `cause` names the cause.
 CREATE TABLE IF NOT EXISTS document_links (
     run_id       TEXT NOT NULL REFERENCES runs(id),
     case_uid     TEXT NOT NULL,
     round_index  INTEGER,
-    doc_id       TEXT NOT NULL,
+    doc_id       TEXT,
     section_id   TEXT,
-    relation     TEXT NOT NULL CHECK (relation IN ('resolves', 'supports', 'equivalent', 'hard_negative')),
+    relation     TEXT NOT NULL CHECK (relation IN ('resolves', 'supports', 'equivalent', 'hard_negative', 'undocumented')),
     grade        INTEGER NOT NULL CHECK (grade IN (0, 1, 2)),
     basis        TEXT NOT NULL,
+    cause        TEXT,
+    CHECK ((relation = 'undocumented') = (doc_id IS NULL)),
     FOREIGN KEY (run_id, doc_id) REFERENCES documents(run_id, doc_id)
 );
 CREATE INDEX IF NOT EXISTS idx_document_links_case ON document_links(run_id, case_uid);

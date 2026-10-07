@@ -187,3 +187,28 @@ def test_one_answer_source_per_known_case() -> None:
     unknown = BuildResult(cases=[CaseAnswer(case_uid="nope", answer_source="agent_knowledge")])
     with pytest.raises(ValueError, match="unknown case"):
         run_builders(_ctx(), [_Fixed("f", unknown)])
+
+
+def test_an_undocumented_link_names_its_cause_and_points_at_no_document() -> None:
+    link = DocumentLink(
+        case_uid="run:000000",
+        doc_id=None,
+        relation="undocumented",
+        grade=0,
+        basis="root_cause_fix",
+        cause="loose connector",
+    )
+    result, _ = run_builders(_ctx(), [_Fixed("f", BuildResult(links=[link]))])
+    assert result.links == [link]
+    with pytest.raises(ValidationError, match="points at no document"):
+        DocumentLink(
+            case_uid="c", doc_id="d", relation="undocumented", grade=0, basis="x", cause="y"
+        )
+    with pytest.raises(ValidationError, match="names its cause"):
+        DocumentLink(case_uid="c", doc_id=None, relation="undocumented", grade=0, basis="x")
+    with pytest.raises(ValidationError, match="cannot have grade"):
+        DocumentLink(
+            case_uid="c", doc_id=None, relation="undocumented", grade=2, basis="x", cause="y"
+        )
+    with pytest.raises(ValidationError, match="needs a document"):
+        DocumentLink(case_uid="c", doc_id=None, relation="supports", grade=1, basis="x")
