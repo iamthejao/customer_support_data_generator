@@ -374,15 +374,22 @@ def test_problems_without_a_plan_or_a_known_model(
     assert not _links(result, 1)
 
 
-def test_an_identifier_the_registry_lacks_fails_the_build(
+def test_an_identifier_the_registry_lacks_is_left_out(
     company: CompanyProfile, registry: dict[str, ProductFacts]
 ) -> None:
     ctx = _ctx(company, registry)
     plan = DiagnosisPlan.model_validate(ctx.problems[0].diagnosis_plan)
     plan.candidate_causes[1].resolution_steps = ["Clear code F-99 from the log"]
+    plan.candidate_causes[2].parts = ["AC-PSU-999 Fan, rear", "AC-PSU-001 Power supply unit, 240 W"]
     ctx.problems[0].diagnosis_plan = plan.model_dump()
-    with pytest.raises(ValueError, match="F-99"):
-        _build(ctx)
+    ctx.problems[0].symptoms = ["The display shows F-01 (or F-98)"]
+    corpus = "\n".join(_text(b.document) for b in _build(ctx).documents)
+    for invented in ["F-99", "F-98", "AC-PSU-999"]:
+        assert invented not in corpus
+    assert "Clear code from the log" in corpus
+    assert "The display shows F-01" in corpus
+    assert "| - | Fan, rear | - |" in corpus
+    assert "AC-PSU-001" in corpus
 
 
 def test_kb_numbers_are_seeded_unique_and_dated_before_the_first_contact() -> None:

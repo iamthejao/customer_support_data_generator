@@ -26,7 +26,8 @@ article with a remedy for the same cause on the same model is equivalent
 (grade 2). A root cause that is agent knowledge only gets an ``undocumented``
 link instead. Every number is the registry's: document numbers, part numbers,
 error codes, and cross-references resolved from placeholders
-(:mod:`csfd.documents.placeholders`).
+(:mod:`csfd.documents.placeholders`); a number the problems' text names but the
+registry lacks is left out.
 """
 
 from __future__ import annotations
@@ -58,7 +59,7 @@ from csfd.documents.ir import (
     Table,
     make_doc_id,
 )
-from csfd.documents.placeholders import resolve_document
+from csfd.documents.placeholders import map_text, resolve_document
 from csfd.documents.registry import (
     DocRef,
     ErrorCode,
@@ -66,8 +67,9 @@ from csfd.documents.registry import (
     cited_error_codes,
     find_part,
     kb_documents,
+    part_name,
+    strip_unknown_identifiers,
     text_values,
-    unknown_identifiers,
 )
 from csfd.storage.repository import ProblemRecord
 
@@ -127,7 +129,7 @@ def _parts_table(
         if part is not None:
             rows.append([part.part_number, part.name, str(part.item) if part.item else "-"])
         else:  # a part the registry does not number: named, never given an invented number
-            rows.append(["-", entry.strip(), "-"])
+            rows.append(["-", part_name(entry, ctx.registry) or "-", "-"])
     if not rows:
         return None
     return Table(
@@ -562,26 +564,18 @@ def _chapter(
     )
 
 
-def _check_identifiers(doc: DocumentIR, ctx: BuildContext, model: str | None) -> None:
-    """Fail a document that names a part number or error code the registry lacks."""
+def _drop_unknown_identifiers(doc: DocumentIR, ctx: BuildContext, model: str | None) -> DocumentIR:
+    """``doc`` without the part numbers and error codes the registry lacks.
+
+    Problems of a run generated with documents disabled were written without
+    the registry, so their text can name numbers it does not hold.
+    """
     if ctx.company is None or not ctx.registry:
-        return
-    texts = [text for s, _, _ in doc.walk() for b in s.blocks for text in _block_texts(b)]
-    issues = unknown_identifiers(texts, ctx.registry, model, ctx.company.case_facts)
-    if issues:
-        raise ValueError(f"document {doc.doc_id}: " + " ".join(issues))
-
-
-def _block_texts(block: Block) -> list[str]:
-    if isinstance(block, Paragraph | Admonition):
-        return [block.text]
-    if isinstance(block, ItemList):
-        return list(block.items)
-    if isinstance(block, Table):
-        return [block.caption, *(cell for row in block.rows for cell in row)]
-    if isinstance(block, Procedure):
-        return [block.title, *(t for st in block.steps for t in (st.text, st.expected or ""))]
-    return []
+        return doc
+    catalogue = ctx.company.case_facts
+    return map_text(
+        doc, lambda text: strip_unknown_identifiers(text, ctx.registry, model, catalogue)
+    )
 
 
 class TroubleshootingBuilder:
@@ -614,12 +608,11 @@ class TroubleshootingBuilder:
             chapter = _chapter(model, on_model, ctx, withheld) if on_model else None
             if chapter is not None:
                 chapters[model] = chapter
+        models = {p.record.id: p.model for p in problems}
         for pid, built in articles.items():
-            _check_identifiers(
-                built.doc, ctx, next(p.model for p in problems if p.record.id == pid)
-            )
+            built.doc = _drop_unknown_identifiers(built.doc, ctx, models[pid])
         for model, built in chapters.items():
-            _check_identifiers(built.doc, ctx, model)
+            built.doc = _drop_unknown_identifiers(built.doc, ctx, model)
         result.documents = [BuiltDocument(document=b.doc) for b in articles.values()] + [
             BuiltDocument(document=b.doc) for b in chapters.values()
         ]

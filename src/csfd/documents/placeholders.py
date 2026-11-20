@@ -16,6 +16,7 @@ A placeholder naming something the registry or the document lacks is an error.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 from csfd.documents.ir import (
     Admonition,
@@ -62,10 +63,7 @@ def resolve_text(text: str, facts: ProductFacts | None, doc: DocumentIR) -> str:
     return PLACEHOLDER.sub(sub, text)
 
 
-def _block(block: Block, facts: ProductFacts | None, doc: DocumentIR) -> Block:
-    def r(text: str) -> str:
-        return resolve_text(text, facts, doc)
-
+def _block(block: Block, r: Callable[[str], str]) -> Block:
     if isinstance(block, Paragraph | Admonition):
         return block.model_copy(update={"text": r(block.text)})
     if isinstance(block, ItemList):
@@ -88,15 +86,23 @@ def _block(block: Block, facts: ProductFacts | None, doc: DocumentIR) -> Block:
     return block
 
 
-def resolve_document(doc: DocumentIR, facts: ProductFacts | None) -> DocumentIR:
-    """``doc`` with the placeholders of every block resolved."""
+def map_text(doc: DocumentIR, r: Callable[[str], str]) -> DocumentIR:
+    """``doc`` with ``r`` applied to its title, every section title and every block's text."""
 
     def section(s: Section) -> Section:
         return s.model_copy(
             update={
-                "blocks": [_block(b, facts, doc) for b in s.blocks],
+                "title": r(s.title),
+                "blocks": [_block(b, r) for b in s.blocks],
                 "subsections": [section(c) for c in s.subsections],
             }
         )
 
-    return doc.model_copy(update={"sections": [section(s) for s in doc.sections]})
+    return doc.model_copy(
+        update={"title": r(doc.title), "sections": [section(s) for s in doc.sections]}
+    )
+
+
+def resolve_document(doc: DocumentIR, facts: ProductFacts | None) -> DocumentIR:
+    """``doc`` with the placeholders of every title and block resolved."""
+    return map_text(doc, lambda text: resolve_text(text, facts, doc))

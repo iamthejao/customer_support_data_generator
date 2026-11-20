@@ -9,9 +9,10 @@ from pathlib import Path
 import pytest
 
 from csfd.diagnosis import CandidateCause, DiagnosisPlan
-from csfd.documents.backfill import load_context
+from csfd.documents.backfill import build_run_documents, load_context
 from csfd.documents.build import BUILDERS
 from csfd.documents.registry import build_registry
+from csfd.documents.sidecar import render_markdown
 from csfd.documents.troubleshooting import TroubleshootingBuilder
 from csfd.seeds.company import parse_company_seed
 from csfd.storage.db import Database
@@ -38,7 +39,9 @@ def _plan(cause: str) -> dict[str, object]:
     ).model_dump()
 
 
-def _db(tmp_path: Path, *, calendar: bool = True) -> Database:
+def _db(
+    tmp_path: Path, *, calendar: bool = True, plan0: dict[str, object] | None = None
+) -> Database:
     seeds = tmp_path / "seeds" / "acme"
     seeds.mkdir(parents=True)
     seeds.joinpath("company_seed.md").write_text(FIXTURE.read_text(), encoding="utf-8")
@@ -82,7 +85,7 @@ def _db(tmp_path: Path, *, calendar: bool = True) -> Database:
                 resolution_hints={},
                 quality_flag=None,
                 created_at=START,
-                diagnosis_plan=_plan(f"cause {i}"),
+                diagnosis_plan=plan0 if i == 0 and plan0 else _plan(f"cause {i}"),
             )
         )
         for model in models:
@@ -124,6 +127,33 @@ def test_a_run_without_a_stored_registry_gets_the_code_drawn_one(tmp_path: Path)
         f"{RUN}:p:0001": "AX-200",  # the one model its cases ran on
         f"{RUN}:p:0002": None,
     }
+
+
+def test_a_run_without_a_stored_registry_leaves_out_numbers_it_lacks(tmp_path: Path) -> None:
+    """Problems of a run generated with documents disabled were written without the registry."""
+    plan = DiagnosisPlan(
+        candidate_causes=[
+            CandidateCause(
+                cause="Failed rear fan",
+                is_root_cause=True,
+                resolution_steps=["Clear code F-45, then replace the AC-PSU-999 fan"],
+                parts=["AC-PSU-999 Fan, rear", "AC-PSU-001 Power supply unit, 240 W"],
+            )
+        ]
+    ).model_dump()
+    db = _db(tmp_path, plan0=plan)
+    result = build_run_documents(
+        db,
+        RUN,
+        [TroubleshootingBuilder()],
+        seeds_dir=tmp_path / "seeds",
+        coverage_proportions={"documented": 1.0},
+    )
+    kb = next(b.document for b in result.documents if b.document.problem_id == f"{RUN}:p:0000")
+    text = render_markdown(kb, {})
+    assert "F-45" not in text and "AC-PSU-999" not in text
+    assert "Clear code, then replace the fan" in text
+    assert "Fan, rear" in text and "AC-PSU-001" in text
 
 
 async def test_a_stored_registry_wins(tmp_path: Path) -> None:

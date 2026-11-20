@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import re
 import string
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from datetime import date, datetime, timedelta
 from random import Random
 from typing import Any, Literal
@@ -428,9 +428,31 @@ def _patterns(identifiers: Iterable[str]) -> list[re.Pattern[str]]:
 
 
 def _mask_serials(text: str, catalogue: CaseFactsCatalogue) -> str:
+    """``text`` with serial numbers blanked out, every other character kept in place."""
     for fmt in dict.fromkeys(a.serial_format for a in catalogue.assets if a.serial_format):
-        text = format_pattern(fmt).sub(" ", text)
+        text = format_pattern(fmt).sub(lambda m: " " * len(m.group()), text)
     return text
+
+
+def _unknown_matches(
+    text: str, registry: Mapping[str, ProductFacts], model: str | None
+) -> Iterator[tuple[str, re.Match[str], str | None]]:
+    """(kind, match, owning model) for each identifier in ``text`` that ``model``'s entry lacks."""
+    facts = registry.get(model) if model is not None else None
+    scope = [facts] if facts is not None else list(registry.values())
+    kinds = {
+        "part number": [(p.part_number, f.model) for f in registry.values() for p in f.parts],
+        "error code": [(c.code, f.model) for f in registry.values() for c in f.error_codes],
+    }
+    allowed = {_normalise(p.part_number) for f in scope for p in f.parts}
+    allowed |= {_normalise(c.code) for f in scope for c in f.error_codes}
+    for kind, ids in kinds.items():
+        owners = {_normalise(i): m for i, m in ids}
+        for pattern in _patterns(i for i, _ in ids):
+            for m in pattern.finditer(text):
+                found = _normalise(m.group())
+                if found not in allowed:
+                    yield kind, m, owners.get(found)
 
 
 def unknown_identifiers(
@@ -449,31 +471,45 @@ def unknown_identifiers(
     if not registry:
         return []
     text = _mask_serials("\n".join(texts), catalogue)
-    facts = registry.get(model) if model is not None else None
-    scope = [facts] if facts is not None else list(registry.values())
-    where = f"the {model}" if facts is not None else "any machine"
-    kinds = {
-        "part number": [(p.part_number, f.model) for f in registry.values() for p in f.parts],
-        "error code": [(c.code, f.model) for f in registry.values() for c in f.error_codes],
-    }
-    allowed = {_normalise(p.part_number) for f in scope for p in f.parts}
-    allowed |= {_normalise(c.code) for f in scope for c in f.error_codes}
-    issues: list[str] = []
-    for kind, ids in kinds.items():
-        owners = {_normalise(i): m for i, m in ids}
-        seen: set[str] = set()
-        for pattern in _patterns(i for i, _ in ids):
-            for m in pattern.finditer(text):
-                found = _normalise(m.group())
-                if found in allowed or found in seen:
-                    continue
-                seen.add(found)
-                owner = owners.get(found)
-                issues.append(
-                    f"{m.group()!r} is not a registry {kind} of {where}"
-                    + (f" (it belongs to the {owner})." if owner else "; do not invent one.")
-                )
-    return issues
+    where = f"the {model}" if model in registry else "any machine"
+    issues: dict[str, str] = {}
+    for kind, m, owner in _unknown_matches(text, registry, model):
+        issues.setdefault(
+            f"{kind}:{_normalise(m.group())}",
+            f"{m.group()!r} is not a registry {kind} of {where}"
+            + (f" (it belongs to the {owner})." if owner else "; do not invent one."),
+        )
+    return list(issues.values())
+
+
+def strip_unknown_identifiers(
+    text: str,
+    registry: Mapping[str, ProductFacts],
+    model: str | None,
+    catalogue: CaseFactsCatalogue,
+) -> str:
+    """``text`` without the identifiers :func:`unknown_identifiers` reports in it.
+
+    For text written without the registry (a run generated with documents
+    disabled): a number the registry does not hold is left out, never printed.
+    """
+    if not registry:
+        return text
+    spans = sorted(
+        m.span() for _, m, _ in _unknown_matches(_mask_serials(text, catalogue), registry, model)
+    )
+    if not spans:
+        return text
+    kept: list[str] = []
+    end = 0
+    for start, stop in spans:
+        if start >= end:
+            kept.append(text[end:start])
+        end = max(end, stop)
+    kept.append(text[end:])
+    out = re.sub(r"\(\s*\)", "", "".join(kept))
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    return re.sub(r" +([,.;:)])", r"\1", out).strip()
 
 
 def text_values(value: Any) -> list[str]:
@@ -569,6 +605,13 @@ def _leading_number(entry: str, shapes: set[Shape]) -> str | None:
         return None
     shape = _shape(token)
     return token if any(_near(shape, s) for s in shapes) else None
+
+
+def part_name(entry: str, registry: Mapping[str, ProductFacts]) -> str:
+    """A parts entry without the part number it starts with: "KD-60-9999 Fan" -> "Fan"."""
+    entry = entry.strip()
+    lead = _leading_number(entry, _shapes(registry))
+    return entry[len(lead) :].lstrip(" ,;:-") if lead else entry
 
 
 def unregistered_part_numbers(
