@@ -447,3 +447,19 @@ def test_no_undocumented_fix_appears_anywhere_in_the_corpus(
     # The registry action that states the fan-tray fix is withheld unless that fix is documented.
     if coverage[P0]["Failed fan tray"] != "documented":
         assert "Replace the fan tray" not in corpus
+
+
+@pytest.mark.parametrize("level", ["partial", "agent_only"])
+def test_an_uncited_code_whose_action_states_an_undocumented_fix_is_withheld(
+    company: CompanyProfile, registry: dict[str, ProductFacts], level: Coverage
+) -> None:
+    """The chapter lists every code of the model, cited or not; none may print a hidden fix."""
+    coverage: dict[str, dict[str, Coverage]] = {
+        P0: {"Failed fan tray": level},
+        P1: {"Failed fan tray": level},
+    }
+    ctx = _ctx(company, registry, coverage)
+    ctx.problems[0].symptoms = ["It runs hot"]  # no problem names F-01
+    corpus = "\n".join(_text(b.document) for b in _build(ctx).documents)
+    assert "| F-01 | Fan tray failure | - |" in corpus
+    assert "Replace the fan tray" not in corpus

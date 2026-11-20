@@ -246,9 +246,12 @@ def _withheld_actions(problems: Sequence[_Problem], ctx: BuildContext) -> set[tu
     A registry action can state the fix of a cause whose fix is not documented
     (an error code's "replace the fan tray" is the fix of "failed fan tray"),
     so every code a problem with a partial or agent-only cause cites, anywhere
-    in its text or plan, is printed without its action.
+    in its text or plan, is printed without its action. A chapter lists every
+    code of its model, cited or not, so any code whose action states such a
+    cause's fix text is withheld too.
     """
     withheld: set[tuple[str, str]] = set()
+    hidden: set[str] = set()
     for p in problems:
         if not p.hides_fix:
             continue
@@ -258,6 +261,15 @@ def _withheld_actions(problems: Sequence[_Problem], ctx: BuildContext) -> set[tu
         for model in models:
             assert model is not None
             withheld |= {(model, c.code) for c in cited_error_codes(texts, ctx.registry[model])}
+        for cause in p.plan.candidate_causes:
+            if ctx.coverage_of(r.id, cause.cause) != "documented":
+                fixes = [*cause.resolution_steps, cause.verification, cause.workaround]
+                hidden |= {cause_key(t) for t in fixes if t and cause_key(t)}
+    for model, facts in ctx.registry.items():
+        for c in facts.error_codes:
+            action = cause_key(c.action or "")
+            if action and any(h in action for h in hidden):
+                withheld.add((model, c.code))
     return withheld
 
 
