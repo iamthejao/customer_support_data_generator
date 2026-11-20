@@ -156,6 +156,35 @@ def test_a_run_without_a_stored_registry_leaves_out_numbers_it_lacks(tmp_path: P
     assert "Fan, rear" in text and "AC-PSU-001" in text
 
 
+def test_a_run_without_a_stored_registry_leaves_out_numbers_of_any_shape(tmp_path: Path) -> None:
+    """Numbers shaped unlike the registry's (another company's, say) are left out too."""
+    plan = DiagnosisPlan(
+        candidate_causes=[
+            CandidateCause(
+                cause="Blocked air inlet",
+                is_root_cause=True,
+                resolution_steps=["Clear XB-17, then clean the KD-60 fan grille"],
+                parts=["KD-60-9999 Fan", "ZZ-QRS-123 Filter mat"],
+            )
+        ]
+    ).model_dump()
+    db = _db(tmp_path, plan0=plan)
+    result = build_run_documents(
+        db,
+        RUN,
+        [TroubleshootingBuilder()],
+        seeds_dir=tmp_path / "seeds",
+        coverage_proportions={"documented": 1.0},
+    )
+    kb = next(b.document for b in result.documents if b.document.problem_id == f"{RUN}:p:0000")
+    text = render_markdown(kb, {})
+    for invented in ("XB-17", "KD-60", "ZZ-QRS-123"):
+        assert invented not in text
+    assert "Clear, then clean the fan grille" in text
+    assert "| - | Fan | - |" in text and "| - | Filter mat | - |" in text
+    assert kb.doc_number in text
+
+
 async def test_a_stored_registry_wins(tmp_path: Path) -> None:
     db = _db(tmp_path)
     company = parse_company_seed(FIXTURE)

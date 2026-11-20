@@ -60,6 +60,12 @@ LANGUAGE_CODE = "EN"
 _CODE_FORMATS = {"error": "E-##", "warning": "W-##"}
 _MAX_DRAWS = 10_000
 _TOKEN = re.compile(r"[A-Za-z0-9]+(?:[-/][A-Za-z0-9]+)*")
+# Any part number or error code, whatever its shape: upper-case letter groups,
+# then a group of two or more digits (E-45, KD-60-9999, AC-PSU-001).
+_ANY_IDENTIFIER = re.compile(
+    r"(?<![A-Za-z0-9./-])[A-Z]{1,4}(?:-[A-Z]{1,4})*-\d{2,}(?:-[A-Za-z0-9]+)*"
+    r"(?![A-Za-z0-9/-]|\.\d)"
+)
 
 Shape = tuple[str | int, ...]
 
@@ -488,16 +494,30 @@ def strip_unknown_identifiers(
     model: str | None,
     catalogue: CaseFactsCatalogue,
 ) -> str:
-    """``text`` without the identifiers :func:`unknown_identifiers` reports in it.
+    """``text`` without the part numbers and error codes ``model``'s registry entry lacks.
+
+    These are the identifiers :func:`unknown_identifiers` reports, plus any
+    other identifier-shaped token (``_ANY_IDENTIFIER``) that is not one of
+    ``model``'s identifiers, a catalogue model or a registry document number.
 
     For text written without the registry (a run generated with documents
     disabled): a number the registry does not hold is left out, never printed.
     """
     if not registry:
         return text
-    spans = sorted(
-        m.span() for _, m, _ in _unknown_matches(_mask_serials(text, catalogue), registry, model)
-    )
+    masked = _mask_serials(text, catalogue)
+    spans = [m.span() for _, m, _ in _unknown_matches(masked, registry, model)]
+    # A number shaped unlike any the registry holds is not seen by
+    # _unknown_matches; model names and document numbers are kept.
+    facts = registry.get(model) if model is not None else None
+    scope = [facts] if facts is not None else list(registry.values())
+    kept_ids = {_normalise(i) for f in scope for i in _model_identifiers(f)}
+    kept_ids |= {_normalise(a.model) for a in catalogue.assets}
+    kept_ids |= {_normalise(d.doc_number) for f in registry.values() for d in f.documents}
+    spans += [
+        m.span() for m in _ANY_IDENTIFIER.finditer(masked) if _normalise(m.group()) not in kept_ids
+    ]
+    spans.sort()
     if not spans:
         return text
     kept: list[str] = []
