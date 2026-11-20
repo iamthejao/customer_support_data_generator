@@ -1,7 +1,8 @@
 """CLI: `csfd documents` (back-fill) and `csfd export --format documents`, end to end.
 
 Uses the fixture builder (tests.fixtures.sample_documents) registered for the
-test; no builder ships yet and no model is called.
+test; no model is called. The shipped builder is covered by
+test_cli_troubleshooting_documents.
 """
 
 from __future__ import annotations
@@ -46,7 +47,7 @@ def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "documents:\n  enabled: true\n  builders: [sample]\n", encoding="utf-8"
     )
     (config / "profiles" / "nobuilders.yaml").write_text(
-        "documents:\n  enabled: true\n", encoding="utf-8"
+        "documents:\n  enabled: true\n  builders: []\n", encoding="utf-8"
     )
     (config / "profiles" / "typo.yaml").write_text(
         "documents:\n  enabled: true\n  builders: [smaple]\n", encoding="utf-8"

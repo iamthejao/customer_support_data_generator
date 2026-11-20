@@ -7,8 +7,9 @@
   2 (resolves) and 1 (supports); a header row first.
 * ``qrels/test.resolves.tsv`` — only the grade-2 pairs, scored 1, for "did it find
   the fix" metrics (BEIR's evaluator counts grade 1 as relevant too).
-* ``qrels_detailed.jsonl`` — every link with its relation, basis and contact,
-  including hard negatives (grade 0).
+* ``qrels_detailed.jsonl`` — every link with its relation, basis, cause and
+  contact, including hard negatives (grade 0) and ``undocumented`` rows (no
+  corpus id: the case's fix is in no document, only in the agent's knowledge).
 
 Query ids are ``q:<case_uid>`` so they never collide with corpus ids. A link to a
 whole document (no section) applies to every section of that document.
@@ -22,7 +23,8 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from csfd.documents.build import AnswerSource, DocumentLink
+from csfd.documents.build import DocumentLink
+from csfd.documents.coverage import AnswerSource
 from csfd.documents.ir import DocumentIR
 from csfd.documents.sidecar import Chunk, chunk_id
 
@@ -91,6 +93,19 @@ def write_rag_files(
     detailed = []
     best: dict[tuple[str, str], int] = {}
     for link in links:
+        if link.doc_id is None:
+            detailed.append(
+                {
+                    "query-id": query_id(link.case_uid),
+                    "corpus-id": None,
+                    "score": link.grade,
+                    "relation": link.relation,
+                    "basis": link.basis,
+                    "cause": link.cause,
+                    "round_index": link.round_index,
+                }
+            )
+            continue
         targets = [link.section_id] if link.section_id else sections_of.get(link.doc_id, [])
         for section_id in targets:
             qid, cid = query_id(link.case_uid), chunk_id(link.doc_id, section_id)
@@ -101,6 +116,7 @@ def write_rag_files(
                     "score": link.grade,
                     "relation": link.relation,
                     "basis": link.basis,
+                    "cause": link.cause,
                     "round_index": link.round_index,
                 }
             )

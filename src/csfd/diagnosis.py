@@ -147,6 +147,17 @@ def plan_beats(
     return beats
 
 
+def guide_causes(plan: DiagnosisPlan, *, seed_label: str) -> list[CandidateCause]:
+    """The candidate causes in the guide's neutral, seeded order.
+
+    Documents built from the plan list the causes in this same order, so the
+    position of a cause reveals nothing about which one is the root cause.
+    """
+    causes = list(plan.candidate_causes)
+    derive_rng(0, f"{seed_label}:causes").shuffle(causes)
+    return causes
+
+
 def agent_guide(
     plan: DiagnosisPlan, beat: ContactBeat, *, done_checks: Sequence[int], seed_label: str
 ) -> dict[str, Any]:
@@ -156,8 +167,9 @@ def agent_guide(
     its position nor the presence of a fix marks the true cause; the agent has
     to run the checks to know which fix applies.
     """
-    causes = [c.model_dump(exclude={"is_root_cause"}) for c in plan.candidate_causes]
-    derive_rng(0, f"{seed_label}:causes").shuffle(causes)
+    causes = [
+        c.model_dump(exclude={"is_root_cause"}) for c in guide_causes(plan, seed_label=seed_label)
+    ]
     return {
         "candidate_causes": causes,
         "checks": [

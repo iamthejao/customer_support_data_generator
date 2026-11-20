@@ -16,6 +16,9 @@ table. The sources are mixed:
   ``derive_rng(run_seed, "registry:...")`` stream, like serial numbers
   (:func:`csfd.facts.draw_case_facts`).
 
+Knowledge-base articles are numbered per problem, after Phase 1, by the same
+rules (:func:`kb_documents`).
+
 Phase 1 sees each model's parts and error codes (:func:`phase1_view`) and cites
 parts by number; :func:`unknown_identifiers` fails text that names a part number
 or error code the registry does not hold, and :func:`register_parts` gives a
@@ -28,8 +31,9 @@ from __future__ import annotations
 
 import re
 import string
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from datetime import date, datetime, timedelta
+from random import Random
 from typing import Any, Literal
 
 from faker import Faker
@@ -56,6 +60,12 @@ LANGUAGE_CODE = "EN"
 _CODE_FORMATS = {"error": "E-##", "warning": "W-##"}
 _MAX_DRAWS = 10_000
 _TOKEN = re.compile(r"[A-Za-z0-9]+(?:[-/][A-Za-z0-9]+)*")
+# Any part number or error code, whatever its shape: upper-case letter groups,
+# then a group of two or more digits (E-45, KD-60-9999, AC-PSU-001).
+_ANY_IDENTIFIER = re.compile(
+    r"(?<![A-Za-z0-9./-])[A-Z]{1,4}(?:-[A-Z]{1,4})*-\d{2,}(?:-[A-Za-z0-9]+)*"
+    r"(?![A-Za-z0-9/-]|\.\d)"
+)
 
 Shape = tuple[str | int, ...]
 
@@ -242,17 +252,52 @@ def _documents(
         revisions = list(row.revisions) if row and row.revisions else []
         count = len(revisions) or rng.randint(1, 4)
         revisions = revisions or list(string.ascii_uppercase[:count])
-        # Drawn backwards from the first contact: the current revision is the newest.
-        issued = [calendar_start.date() - timedelta(days=rng.randint(30, 365))]
-        for _ in range(count - 1):
-            issued.insert(0, issued[0] - timedelta(days=rng.randint(120, 720)))
         refs.append(
             DocRef(
                 doc_number=number,
                 doc_type=doc_type,
                 revisions=revisions,
-                issued=issued,
+                issued=_issue_dates(rng, count, calendar_start),
             )
+        )
+    return refs
+
+
+def _issue_dates(rng: Random, count: int, calendar_start: datetime) -> list[date]:
+    """``count`` issue dates, oldest first, drawn backwards from the first contact."""
+    issued = [calendar_start.date() - timedelta(days=rng.randint(30, 365))]
+    for _ in range(count - 1):
+        issued.insert(0, issued[0] - timedelta(days=rng.randint(120, 720)))
+    return issued
+
+
+def kb_documents(
+    company_name: str,
+    problem_ids: Sequence[str],
+    *,
+    seed: int,
+    calendar_start: datetime,
+) -> dict[str, DocRef]:
+    """The number and revision history of each problem's knowledge-base article.
+
+    Problems come after the registry, so their articles are numbered here, by
+    the same rules: ``<prefix>-KB-####`` drawn from the run seed, unique in the
+    run, revisions and issue dates before the first contact. Numbers are drawn
+    in sorted problem-id order, so they do not depend on the caller's order.
+    """
+    fmt = f"{company_prefix(company_name)}-KB-####"
+    taken: set[str] = set()
+    refs: dict[str, DocRef] = {}
+    for problem_id in sorted(problem_ids):
+        rng = derive_rng(seed, f"registry:kb:{problem_id}")
+        fake = Faker()
+        fake.seed_instance(rng.getrandbits(64))
+        count = rng.randint(1, 3)
+        refs[problem_id] = DocRef(
+            doc_number=_fresh(fake, fmt, taken),
+            doc_type="kb_article",
+            revisions=list(string.ascii_uppercase[:count]),
+            issued=_issue_dates(rng, count, calendar_start),
         )
     return refs
 
@@ -389,9 +434,31 @@ def _patterns(identifiers: Iterable[str]) -> list[re.Pattern[str]]:
 
 
 def _mask_serials(text: str, catalogue: CaseFactsCatalogue) -> str:
+    """``text`` with serial numbers blanked out, every other character kept in place."""
     for fmt in dict.fromkeys(a.serial_format for a in catalogue.assets if a.serial_format):
-        text = format_pattern(fmt).sub(" ", text)
+        text = format_pattern(fmt).sub(lambda m: " " * len(m.group()), text)
     return text
+
+
+def _unknown_matches(
+    text: str, registry: Mapping[str, ProductFacts], model: str | None
+) -> Iterator[tuple[str, re.Match[str], str | None]]:
+    """(kind, match, owning model) for each identifier in ``text`` that ``model``'s entry lacks."""
+    facts = registry.get(model) if model is not None else None
+    scope = [facts] if facts is not None else list(registry.values())
+    kinds = {
+        "part number": [(p.part_number, f.model) for f in registry.values() for p in f.parts],
+        "error code": [(c.code, f.model) for f in registry.values() for c in f.error_codes],
+    }
+    allowed = {_normalise(p.part_number) for f in scope for p in f.parts}
+    allowed |= {_normalise(c.code) for f in scope for c in f.error_codes}
+    for kind, ids in kinds.items():
+        owners = {_normalise(i): m for i, m in ids}
+        for pattern in _patterns(i for i, _ in ids):
+            for m in pattern.finditer(text):
+                found = _normalise(m.group())
+                if found not in allowed:
+                    yield kind, m, owners.get(found)
 
 
 def unknown_identifiers(
@@ -410,31 +477,59 @@ def unknown_identifiers(
     if not registry:
         return []
     text = _mask_serials("\n".join(texts), catalogue)
+    where = f"the {model}" if model in registry else "any machine"
+    issues: dict[str, str] = {}
+    for kind, m, owner in _unknown_matches(text, registry, model):
+        issues.setdefault(
+            f"{kind}:{_normalise(m.group())}",
+            f"{m.group()!r} is not a registry {kind} of {where}"
+            + (f" (it belongs to the {owner})." if owner else "; do not invent one."),
+        )
+    return list(issues.values())
+
+
+def strip_unknown_identifiers(
+    text: str,
+    registry: Mapping[str, ProductFacts],
+    model: str | None,
+    catalogue: CaseFactsCatalogue,
+) -> str:
+    """``text`` without the part numbers and error codes ``model``'s registry entry lacks.
+
+    These are the identifiers :func:`unknown_identifiers` reports, plus any
+    other identifier-shaped token (``_ANY_IDENTIFIER``) that is not one of
+    ``model``'s identifiers, a catalogue model or a registry document number.
+
+    For text written without the registry (a run generated with documents
+    disabled): a number the registry does not hold is left out, never printed.
+    """
+    if not registry:
+        return text
+    masked = _mask_serials(text, catalogue)
+    spans = [m.span() for _, m, _ in _unknown_matches(masked, registry, model)]
+    # A number shaped unlike any the registry holds is not seen by
+    # _unknown_matches; model names and document numbers are kept.
     facts = registry.get(model) if model is not None else None
     scope = [facts] if facts is not None else list(registry.values())
-    where = f"the {model}" if facts is not None else "any machine"
-    kinds = {
-        "part number": [(p.part_number, f.model) for f in registry.values() for p in f.parts],
-        "error code": [(c.code, f.model) for f in registry.values() for c in f.error_codes],
-    }
-    allowed = {_normalise(p.part_number) for f in scope for p in f.parts}
-    allowed |= {_normalise(c.code) for f in scope for c in f.error_codes}
-    issues: list[str] = []
-    for kind, ids in kinds.items():
-        owners = {_normalise(i): m for i, m in ids}
-        seen: set[str] = set()
-        for pattern in _patterns(i for i, _ in ids):
-            for m in pattern.finditer(text):
-                found = _normalise(m.group())
-                if found in allowed or found in seen:
-                    continue
-                seen.add(found)
-                owner = owners.get(found)
-                issues.append(
-                    f"{m.group()!r} is not a registry {kind} of {where}"
-                    + (f" (it belongs to the {owner})." if owner else "; do not invent one.")
-                )
-    return issues
+    kept_ids = {_normalise(i) for f in scope for i in _model_identifiers(f)}
+    kept_ids |= {_normalise(a.model) for a in catalogue.assets}
+    kept_ids |= {_normalise(d.doc_number) for f in registry.values() for d in f.documents}
+    spans += [
+        m.span() for m in _ANY_IDENTIFIER.finditer(masked) if _normalise(m.group()) not in kept_ids
+    ]
+    spans.sort()
+    if not spans:
+        return text
+    kept: list[str] = []
+    end = 0
+    for start, stop in spans:
+        if start >= end:
+            kept.append(text[end:start])
+        end = max(end, stop)
+    kept.append(text[end:])
+    out = re.sub(r"\(\s*\)", "", "".join(kept))
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    return re.sub(r" +([,.;:)])", r"\1", out).strip()
 
 
 def text_values(value: Any) -> list[str]:
@@ -532,6 +627,13 @@ def _leading_number(entry: str, shapes: set[Shape]) -> str | None:
     return token if any(_near(shape, s) for s in shapes) else None
 
 
+def part_name(entry: str, registry: Mapping[str, ProductFacts]) -> str:
+    """A parts entry without the part number it starts with: "KD-60-9999 Fan" -> "Fan"."""
+    entry = entry.strip()
+    lead = _leading_number(entry, _shapes(registry))
+    return entry[len(lead) :].lstrip(" ,;:-") if lead else entry
+
+
 def unregistered_part_numbers(
     entries: Iterable[str],
     registry: Mapping[str, ProductFacts],
@@ -623,3 +725,33 @@ def register_parts(
         canonical.append(known.entry if known else entry)
     out[model] = facts
     return out, canonical
+
+
+def _identifier_pattern(identifier: str) -> re.Pattern[str]:
+    """``identifier`` as a whole token, separators optional and case ignored (E-21, e21)."""
+    groups = re.findall(r"[A-Za-z]+|\d+", identifier)
+    return re.compile(
+        r"(?<![A-Za-z0-9])" + r"[-\s]?".join(map(re.escape, groups)) + r"(?![A-Za-z0-9])", re.I
+    )
+
+
+def cited_error_codes(texts: Iterable[str], facts: ProductFacts) -> list[ErrorCode]:
+    """The error codes of ``facts`` that ``texts`` name, in registry order."""
+    text = "\n".join(texts)
+    return [c for c in facts.error_codes if _identifier_pattern(c.code).search(text)]
+
+
+def find_part(entry: str, registry: Mapping[str, ProductFacts], model: str | None) -> Part | None:
+    """The registry part a diagnosis-plan parts entry names by number ("KD-60-2204 Fan").
+
+    ``model``'s parts are searched first, then (for an unknown model) every
+    model's. An entry without a registry number, or with a number the
+    registry lacks, finds nothing: its number is never guessed.
+    """
+    facts = registry.get(model) if model is not None else None
+    scope = [facts] if facts is not None else list(registry.values())
+    for f in scope:
+        for part in f.parts:
+            if _identifier_pattern(part.part_number).search(entry):
+                return part
+    return None

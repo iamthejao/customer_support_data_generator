@@ -1,7 +1,7 @@
 """A fixture document builder: a CF-600 service-manual extract plus one KB article per problem.
 
-Stands in for the real builders (not shipped yet) so the document store,
-renderers, sidecars and retrieval export can be tested end to end. Everything
+Stands in for real builders so the document store, renderers, sidecars and
+retrieval export can be tested end to end with every block type and a figure. Everything
 is deterministic and needs no model.
 """
 

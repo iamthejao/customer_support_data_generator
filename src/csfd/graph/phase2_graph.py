@@ -392,20 +392,13 @@ def _agent_inputs(state: PipelineState, slot: _PlanSlot) -> dict[str, Any]:
     }
 
 
-def _problem_text(problem: ProblemRecord) -> str:
-    """Every free-text field of a problem, for spotting a catalogue model it names."""
-    return "\n".join(
-        [problem.title, problem.summary, problem.background, *problem.symptoms, *problem.root_cause]
-    )
-
-
 def _problem_model(state: PipelineState, problem: ProblemRecord) -> str | None:
     """With an identifier registry, the model a problem is about, also when its text
     names none but its registry identifiers belong to one model (as Phase 1 decided)."""
     if not state.product_facts:
         return None
     return problem_model(
-        _problem_text(problem),
+        problem.free_text(),
         text_values(problem.diagnosis_plan),
         state.product_facts,
         state.company.case_facts,
@@ -489,7 +482,7 @@ async def build_allocation_plan_node(
             state.company.case_facts,
             seed=seed,
             slot_index=s.index,
-            problem_text=_problem_text(problems_by_id[s.problem_id]),
+            problem_text=problems_by_id[s.problem_id].free_text(),
             asset_model=_problem_model(state, problems_by_id[s.problem_id]),
         )
         for s in slots

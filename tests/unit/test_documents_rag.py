@@ -89,3 +89,41 @@ def test_detailed_qrels_keep_relation_basis_contact_and_negatives(tmp_path: Path
     assert negative["score"] == 0
     assert any(r["round_index"] == 2 for r in detailed)
     assert len(detailed) == 4 + 5
+
+
+def test_an_undocumented_case_has_no_resolving_section(tmp_path: Path) -> None:
+    links = [
+        _link(case_uid="run:000001", section_id="sec-1", relation="supports", grade=1),
+        _link(
+            case_uid="run:000001",
+            doc_id=None,
+            relation="undocumented",
+            grade=0,
+            cause="mains brownout",
+        ),
+    ]
+    write_rag_files(tmp_path, DOCS, QUERIES, links, {"run:000001": "agent_knowledge"})
+    graded = _tsv(tmp_path / "rag" / "qrels" / "test.tsv")
+    assert graded[1:] == [["q:run:000001", f"{ARTICLE.doc_id}#sec-1", "1"]]
+    assert _tsv(tmp_path / "rag" / "qrels" / "test.resolves.tsv") == [
+        ["query-id", "corpus-id", "score"]
+    ]
+    detailed = _rows(tmp_path / "rag" / "qrels_detailed.jsonl")
+    assert detailed[1] == {
+        "query-id": "q:run:000001",
+        "corpus-id": None,
+        "score": 0,
+        "relation": "undocumented",
+        "basis": "x",
+        "cause": "mains brownout",
+        "round_index": None,
+    }
+    query = _rows(tmp_path / "rag" / "queries.jsonl")[1]
+    assert query["metadata"] == {
+        "case_uid": "run:000001",
+        "problem_id": "run:p:0000",
+        "ticket_type": "l2",
+        "subject": "s1",
+        "answer_source": "agent_knowledge",
+        "answerable_from_documents": False,
+    }

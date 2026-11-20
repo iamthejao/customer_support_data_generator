@@ -4,35 +4,34 @@ A builder turns a finished run (company, problems with their diagnosis plans,
 cases with their seeded facts) into documents, the images they show, and the
 ground-truth links "case -> document section -> relevance grade" that retrieval
 evaluation scores against. Builders are registered by name in :data:`BUILDERS`
-and selected with ``documents.builders``; none ship yet, so a run gets
-documents only once a builder is registered.
+and selected with ``documents.builders``; ``troubleshooting``
+(:mod:`csfd.documents.troubleshooting`) ships with the package.
 
 Documentation is allowed to be incomplete on purpose: some fixes are known only
 to the support agent, never written down. ``BuildContext.coverage`` says, per
 problem and candidate cause, whether a builder may document it, and
-``BuildContext.answer_sources`` says per case where its answer lives; both are
-inputs a coverage planner fills in, empty meaning "documented".
+``BuildContext.answer_sources`` says per case where its answer lives; both come
+from the coverage planner (:mod:`csfd.documents.coverage`), empty meaning
+"documented". A case whose fix is in no document gets an ``undocumented`` link,
+which names the cause and points at no document.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from csfd.documents.coverage import AnswerSource, Coverage, cause_key
 from csfd.documents.ir import Asset, DocumentIR
+from csfd.documents.registry import ProductFacts
 from csfd.facts import CaseFacts
 from csfd.seeds.company import CompanyProfile
 from csfd.storage.repository import ProblemRecord
 
-# Per candidate cause: in the documents, documented without its fix, or agent knowledge only.
-Coverage = Literal["documented", "partial", "agent_only"]
-# Per case: where the case's fix can be found.
-AnswerSource = Literal["documents", "partial", "agent_knowledge"]
-Relation = Literal["resolves", "supports", "equivalent", "hard_negative"]
+Relation = Literal["resolves", "supports", "equivalent", "hard_negative", "undocumented"]
 
 # The grade each relation carries; "equivalent" takes the grade of the section it matches.
 _RELATION_GRADES: dict[str, frozenset[int]] = {
@@ -40,6 +39,7 @@ _RELATION_GRADES: dict[str, frozenset[int]] = {
     "supports": frozenset({1}),
     "equivalent": frozenset({1, 2}),
     "hard_negative": frozenset({0}),
+    "undocumented": frozenset({0}),
 }
 
 
@@ -48,16 +48,24 @@ class DocumentLink(BaseModel):
 
     case_uid: str  # lineage.ticket_uid
     round_index: int | None = None  # None = the whole case
-    doc_id: str
+    doc_id: str | None  # None only for "undocumented": the fix is in no document
     section_id: str | None = None  # None = the whole document (e.g. a requested manual)
     relation: Relation
-    grade: int  # 2 resolves, 1 supports, 0 hard negative
+    grade: int  # 2 resolves, 1 supports, 0 hard negative or undocumented
     basis: str  # why, e.g. "root_cause_fix", "check:2", "superseded_revision"
+    cause: str | None = None  # the candidate cause the section renders (or that is undocumented)
 
     @model_validator(mode="after")
     def _grade_fits_relation(self) -> DocumentLink:
         if self.grade not in _RELATION_GRADES[self.relation]:
             raise ValueError(f"relation {self.relation!r} cannot have grade {self.grade}")
+        if self.relation == "undocumented":
+            if self.doc_id is not None or self.section_id is not None:
+                raise ValueError("an undocumented link points at no document")
+            if not self.cause:
+                raise ValueError("an undocumented link names its cause")
+        elif self.doc_id is None:
+            raise ValueError(f"a {self.relation!r} link needs a document")
         return self
 
 
@@ -94,6 +102,10 @@ class BuildContext(BaseModel):
     coverage: dict[str, dict[str, Coverage]] = Field(default_factory=dict)
     # case uid -> where its answer lives; a missing entry means not decided.
     answer_sources: dict[str, AnswerSource] = Field(default_factory=dict)
+    # The run's identifier registry by machine model (csfd.documents.registry).
+    registry: dict[str, ProductFacts] = Field(default_factory=dict)
+    # problem id -> the machine model it is about; None (or missing) when unknown.
+    problem_models: dict[str, str | None] = Field(default_factory=dict)
 
     def coverage_of(self, problem_id: str, cause: str) -> Coverage:
         return self.coverage.get(problem_id, {}).get(cause, "documented")
@@ -162,11 +174,6 @@ def run_builders(
     return merged, made_by
 
 
-def _cause_key(cause: str) -> str:
-    """Cause text compared loosely: lower case, punctuation and extra spaces removed."""
-    return " ".join(re.sub(r"[^a-z0-9]+", " ", cause.lower()).split())
-
-
 def _agent_only_causes(ctx: BuildContext, doc: DocumentIR) -> set[str]:
     """Causes the document must not document: agent knowledge for the problems it serves.
 
@@ -181,7 +188,7 @@ def _agent_only_causes(ctx: BuildContext, doc: DocumentIR) -> set[str]:
     else:
         problems = list(ctx.coverage)
     return {
-        _cause_key(cause)
+        cause_key(cause)
         for pid in problems
         if pid is not None
         for cause, level in ctx.coverage.get(pid, {}).items()
@@ -211,7 +218,7 @@ def _check(ctx: BuildContext, result: BuildResult) -> None:
         hidden = _agent_only_causes(ctx, doc)
         for s, _, _ in doc.walk():
             for cause in s.covers:
-                if _cause_key(cause) in hidden:
+                if cause_key(cause) in hidden:
                     raise ValueError(
                         f"document {doc.doc_id} section {s.id} documents {cause!r}, "
                         "which is agent knowledge only"
@@ -219,6 +226,8 @@ def _check(ctx: BuildContext, result: BuildResult) -> None:
     for link in result.links:
         if link.case_uid not in case_uids:
             raise ValueError(f"link to unknown case {link.case_uid}")
+        if link.doc_id is None:
+            continue
         built_doc = docs.get(link.doc_id)
         if built_doc is None:
             raise ValueError(f"link to unknown document {link.doc_id}")

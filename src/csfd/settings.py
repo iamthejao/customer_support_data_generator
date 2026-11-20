@@ -16,6 +16,8 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from csfd.documents.coverage import Coverage, default_coverage_proportions
+
 
 class BudgetConfig(BaseModel):
     max_tokens_per_run: int = 5_000_000
@@ -243,11 +245,24 @@ class DocumentsConfig(BaseModel):
     (:mod:`csfd.documents.registry`) before Phase 1. ``builders`` names the document builders to run
     (``csfd.documents.build.BUILDERS``). ``formats`` are the files rendered
     next to the always-written Markdown and JSON sidecars.
+    ``coverage_proportions`` split the run's distinct candidate causes into
+    documented, partly documented (no fix) and agent-knowledge-only ones
+    (:mod:`csfd.documents.coverage`).
     """
 
     enabled: bool = False
     builders: list[str] = Field(default_factory=list)
     formats: list[DocumentFormat] = Field(default_factory=_default_document_formats)
+    coverage_proportions: dict[Coverage, float] = Field(
+        default_factory=default_coverage_proportions
+    )
+
+    @field_validator("coverage_proportions")
+    @classmethod
+    def _positive_proportions(cls, v: dict[Coverage, float]) -> dict[Coverage, float]:
+        if any(w < 0 for w in v.values()) or sum(v.values()) <= 0:
+            raise ValueError("coverage_proportions must be non-negative with a positive sum")
+        return v
 
 
 class StorageConfig(BaseModel):

@@ -11,7 +11,8 @@ import hashlib
 import json
 from datetime import UTC, datetime
 
-from csfd.documents.build import AnswerSource, BuildResult, DocumentLink
+from csfd.documents.build import BuildResult, DocumentLink
+from csfd.documents.coverage import AnswerSource
 from csfd.documents.ir import Asset, DocumentIR
 from csfd.storage.db import Database
 
@@ -78,8 +79,9 @@ class DocumentRepo:
                 conn.execute(
                     """
                     INSERT INTO document_links
-                      (run_id, case_uid, round_index, doc_id, section_id, relation, grade, basis)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                      (run_id, case_uid, round_index, doc_id, section_id, relation, grade,
+                       basis, cause)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         run_id,
@@ -90,6 +92,7 @@ class DocumentRepo:
                         link.relation,
                         link.grade,
                         link.basis,
+                        link.cause,
                     ),
                 )
             for case in result.cases:
@@ -158,6 +161,7 @@ class DocumentRepo:
                 relation=r["relation"],
                 grade=r["grade"],
                 basis=r["basis"],
+                cause=r["cause"],
             )
             for r in rows
         ]

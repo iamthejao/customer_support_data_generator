@@ -64,6 +64,14 @@ def _result() -> BuildResult:
                 grade=1,
                 basis="requested_document",
             ),
+            DocumentLink(
+                case_uid="c2",
+                doc_id=None,
+                relation="undocumented",
+                grade=0,
+                basis="root_cause_fix",
+                cause="mains brownout",
+            ),
         ],
         cases=[CaseAnswer(case_uid="c1", answer_source="partial")],
     )
@@ -84,7 +92,7 @@ def test_round_trip(tmp_db_path: Path) -> None:
     assets = repo.assets_for_run(RUN)
     assert assets == {figure_asset().asset_id: figure_asset()}
     assert repo.links_for_run(RUN) == sorted(
-        result.links, key=lambda link: (link.case_uid, link.round_index or 0, link.doc_id)
+        result.links, key=lambda link: (link.case_uid, link.round_index or 0, link.doc_id or "")
     )
     assert repo.answer_sources(RUN) == {"c1": "partial"}
 
